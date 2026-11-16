@@ -134,8 +134,8 @@ jobs:
             LLVM_CONFIG=clang-18 LLVM_BINDIR=/usr/bin CC=clang-18 LD=ld.lld-18 \
             DESTDIR="$sdk_root" install
           # Rebuild the pinned PS5 SDL fork without libiconv; SDL has a portable UTF conversion path.
-          sdk_root="$GITHUB_WORKSPACE/$builder/.deps/native/ps5-payload-sdk"
-          pacbrew_sysroot="$GITHUB_WORKSPACE/$builder/.deps/pacbrew/v0.40.2/sysroot"
+          # Initialize PacBrew first so its package resolver reuses the rebuilt SDL2.
+          pacbrew_sysroot=$(bash "$builder/tools/setup-pacbrew-dependencies.sh" --all)
           sdl_source="$GITHUB_WORKSPACE/.build/ps5-sdl2-source"
           patch -d "$sdl_source" -Np1 -i \
             "$GITHUB_WORKSPACE/.build/pacbrew-recipes/SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch"
@@ -162,6 +162,8 @@ jobs:
           export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
           (
             cd "$sdl_source"
+            # Static CMake probes see the SDK declarations for these four wide-string
+            # functions, but the target runtime needs SDL's implementations.
             "$CMAKE" -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
@@ -169,14 +171,11 @@ jobs:
               -DHAVE_PTHREADS=ON \
               -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
               -DHAVE_ICONV=OFF -DHAVE_ICONV_H=OFF -DSDL_USE_LIBICONV=OFF \
+              -DHAVE_WCSLCPY=OFF -DHAVE_WCSLCAT=OFF \
+              -DHAVE_WCSCASECMP=OFF -DHAVE_WCSNCASECMP=OFF \
               -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
               -B build -S .
             "$MAKE" -C build
-            if nm -u build/libSDL2.a | grep -q libiconv; then
-              echo "SDL2 archive still references external libiconv" >&2
-              nm -u build/libSDL2.a | grep libiconv >&2 || true
-              exit 1
-            fi
             export DESTDIR="$pacbrew_sysroot"
             "$MAKE" -C build install
           )
@@ -231,27 +230,6 @@ jobs:
           source = source.replace(old_end, new_end, 1)
           path.write_text(source)
           PY
-          # SDL uses its bundled converter, so remove the redundant static iconv flag.
-          python3 - "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
-          from pathlib import Path
-          import sys
-
-          path = Path(sys.argv[1])
-          source = path.read_text()
-          nl = chr(10)
-          old = "libs = []" + nl + "for flag in raw_libs:" + nl
-          new = nl.join([
-              'if "sdl2" in modules:',
-              '    dropped = [flag for flag in raw_libs if flag in ("-liconv", "-l:libiconv.a") or "libiconv.a" in flag.lower()]',
-              '    raw_libs = [flag for flag in raw_libs if flag not in dropped]',
-              '    if any("iconv" in flag.lower() for flag in raw_libs):',
-              '        raise SystemExit(f"unexpected iconv dependency remains in SDL2 link flags: {raw_libs}")',
-              '    print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)',
-          ]) + nl + old
-          if source.count(old) != 1:
-              raise SystemExit("could not locate the pinned PacBrew resolver block")
-          path.write_text(source.replace(old, new, 1))
-          PY
           for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
             test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
               echo "Missing PS5 SDK import stub: lib${library}.so" >&2
@@ -265,7 +243,17 @@ jobs:
         run: make init TITLE_ID=PPSA91473 APP_NAME="NESTS Retro Game Library" CONTENT_SUFFIX=NESTSRETRO000001
       - name: Cross-compile and create compressed FFPFSC image
         working-directory: .build/ps5-native-app-boilerplate
-        run: make PACBREW_PACKAGES=sdl2 ffpfsc
+        run: |
+          set -euo pipefail
+          pacbrew_sysroot=$(bash tools/setup-pacbrew-dependencies.sh --all)
+          sdl_archive="$pacbrew_sysroot/user/homebrew/lib/libSDL2.a"
+          cmp "$GITHUB_WORKSPACE/.build/ps5-sdl2-source/build/libSDL2.a" "$sdl_archive"
+          nm -u "$sdl_archive" > "$RUNNER_TEMP/sdl2-undefined.txt"
+          if grep -F libiconv "$RUNNER_TEMP/sdl2-undefined.txt" >&2; then
+            echo "Installed SDL2 still references external libiconv" >&2
+            exit 1
+          fi
+          make PACBREW_PACKAGES=sdl2 ffpfsc
       - name: Record artifact provenance and checksum
         shell: bash
         run: |
