@@ -154,9 +154,274 @@ jobs:
               -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
               -DHAVE_PTHREADS=ON \
               -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
+              -DHAVE_ICONV=OFF -DHAVE_ICONV_H=OFF -DSDL_USE_LIBICONV=OFF \
               -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
               -B build -S .
+            # The PS5 target must use SDL's bundled UTF conversion fallback.
+            # Pin the generated config too, because the port toolchain can expose
+            # iconv headers even when SDL_SYSTEM_ICONV is disabled.
+            python3 - <<'PY'
+            from pathlib import Path
+            import re
+
+            config = Path("build/include-config-release/SDL2/SDL_config.h")
+            if not config.is_file():
+                raise SystemExit(f"missing generated SDL config: {config}")
+            source = config.read_text()
+            for macro in ("HAVE_ICONV", "HAVE_ICONV_H", "SDL_USE_LIBICONV"):
+                source, count = re.subn(
+                    rf"(?m)^[ \\t]*#define[ \\t]+{macro}(?:[ \\t]+.*)?$",
+                    f"/* #undef {macro} */",
+                    source,
+                )
+                print(f"NESTS PS5 SDL2: forced {macro} off ({count} generated definition(s))")
+            config.write_text(source)
+            for macro in ("HAVE_ICONV", "HAVE_ICONV_H", "SDL_USE_LIBICONV"):
+                if re.search(rf"(?m)^[ \\t]*#define[ \\t]+{macro}(?:[ \\t]+.*)?$", config.read_text()):
+                    raise SystemExit(f"SDL iconv macro still enabled: {macro}")
+            PY
             "$MAKE" -C build
+            if nm -u build/libSDL2.a | grep -Eq 'libiconv(_open|_close)?            export DESTDIR="$pacbrew_sysroot"
+            "$MAKE" -C build install
+          )
+          "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
+          sdl_pc="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig/sdl2.pc"
+          test -f "$sdl_pc"
+          (
+            export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
+            export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
+            export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
+            echo "Rebuilt SDL2 pkg-config file: $(pkg-config --variable=pcfiledir sdl2)/sdl2.pc"
+            echo "Rebuilt SDL2 private requirements: $(pkg-config --print-requires-private sdl2)"
+            echo "Rebuilt SDL2 static link flags: $(pkg-config --static --libs sdl2)"
+          )
+          if grep -q -- '-liconv' "$sdl_pc"; then
+            echo "Rebuilt SDL2 still exposes libiconv in its static link flags" >&2
+            exit 1
+          fi
+
+          # Install official PS5 libc++ headers/runtime; the app uses the standard
+          # header-only subset (array, atomic, string_view) plus the local new/delete shim.
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path(".build/ps5-payload-sdk-source/libcxx.sh")
+          source = script.read_text()
+          old = '\t -DCMAKE_BUILD_TYPE=Release \\\n'
+          new = old + '\t -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \\\n'
+          if source.count(old) != 1:
+              raise SystemExit("could not identify the pinned libc++ CMake configure flags")
+          script.write_text(source.replace(old, new))
+          PY
+          PS5_PAYLOAD_SDK="$sdk_root" bash .build/ps5-payload-sdk-source/libcxx.sh
+          test -f "$sdk_root/target/include/c++/v1/cstddef"
+          test -f "$sdk_root/target/include/c++/v1/array"
+          test -f "$sdk_root/target/include/c++/v1/atomic"
+          test -f "$sdk_root/target/include/c++/v1/string_view"
+
+          # The SDK exposes SCE imports as shared stub libraries under target/lib.
+          # Add that search path and the three native networking modules used by NESTS.
+          python3 - "$builder/tools/build.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old_link = '"$sdk_root/bin/prospero-lld" -T'
+          old_end = '    --as-needed "$sdk_root"/target/lib/*.so'
+          if source.count(old_link) != 1 or source.count(old_end) != 1:
+              raise SystemExit("expected native linker arguments were not found exactly once")
+          source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
+          new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + chr(10) + '    --as-needed "$sdk_root"/target/lib/*.so'
+          source = source.replace(old_end, new_end, 1)
+          path.write_text(source)
+          PY
+
+          # SDL2 is deliberately configured with SDL_SYSTEM_ICONV=OFF and its
+          # own src/stdlib/SDL_iconv.c fallback. Do not pull in PacBrew's static
+          # libiconv, which references locale symbols not exported by this PS5 SDK.
+          python3 - "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old = 'libs = []\nfor flag in raw_libs:\n'
+          new = (
+              'if "sdl2" in modules:\n'
+              '    dropped = [flag for flag in raw_libs if flag in ("-liconv", "-l:libiconv.a") or "libiconv.a" in flag.lower()]\n'
+              '    raw_libs = [flag for flag in raw_libs if flag not in dropped]\n'
+              '    if any("iconv" in flag.lower() for flag in raw_libs):\n'
+              '        raise SystemExit(f"unexpected iconv dependency remains in SDL2 link flags: {raw_libs}")\n'
+              '    print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)\n'
+              + old
+          )
+          if source.count(old) != 1:
+              raise SystemExit("could not locate the pinned PacBrew resolver block")
+          path.write_text(source.replace(old, new, 1))
+          PY
+          for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
+            test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
+              echo "Missing PS5 SDK import stub: lib${library}.so" >&2
+              exit 1
+            }
+          done
+          rsvg-convert -w 512 -h 512 -o "$builder/sce_sys/icon0.png" preview/nests-mark.svg
+          rm -f "$builder/sce_sys/pic0.dds" "$builder/sce_sys/pic1.dds" "$builder/sce_sys/snd0.at9"
+      - name: Configure NESTS development title identity
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make init TITLE_ID=PPSA91473 APP_NAME="NESTS Retro Game Library" CONTENT_SUFFIX=NESTSRETRO000001
+      - name: Cross-compile and create compressed FFPFSC image
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make PACBREW_PACKAGES=sdl2 ffpfsc
+      - name: Record artifact provenance and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .build/ps5-native-app-boilerplate/dist
+          sha256sum PPSA91473.ffpfsc > SHA256SUMS
+          {
+            echo "project=NESTS"
+            echo "source_commit=$GITHUB_SHA"
+            echo "builder_repository=drakmor/ps5-native-app-boilerplate"
+            echo "builder_commit=470695e0c557f99ff2df0e36e4df713c5e636526"
+            echo "title_id=PPSA91473"
+            echo "format=PS5 homebrew FFPFSC filesystem image"
+            echo "firmware_hardware_validation=NOT_RUN"
+          } > BUILD-INFO.txt
+      - name: Upload native PS5 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NESTS-native-PPSA91473-${{ github.sha }}
+          path: |
+            .build/ps5-native-app-boilerplate/dist/PPSA91473.ffpfsc
+            .build/ps5-native-app-boilerplate/dist/SHA256SUMS
+            .build/ps5-native-app-boilerplate/dist/BUILD-INFO.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+; then
+              echo "SDL2 archive still references external libiconv" >&2
+              nm -u build/libSDL2.a | grep -E 'libiconv(_open|_close)?            export DESTDIR="$pacbrew_sysroot"
+            "$MAKE" -C build install
+          )
+          "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
+          sdl_pc="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig/sdl2.pc"
+          test -f "$sdl_pc"
+          (
+            export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
+            export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
+            export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
+            echo "Rebuilt SDL2 pkg-config file: $(pkg-config --variable=pcfiledir sdl2)/sdl2.pc"
+            echo "Rebuilt SDL2 private requirements: $(pkg-config --print-requires-private sdl2)"
+            echo "Rebuilt SDL2 static link flags: $(pkg-config --static --libs sdl2)"
+          )
+          if grep -q -- '-liconv' "$sdl_pc"; then
+            echo "Rebuilt SDL2 still exposes libiconv in its static link flags" >&2
+            exit 1
+          fi
+
+          # Install official PS5 libc++ headers/runtime; the app uses the standard
+          # header-only subset (array, atomic, string_view) plus the local new/delete shim.
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path(".build/ps5-payload-sdk-source/libcxx.sh")
+          source = script.read_text()
+          old = '\t -DCMAKE_BUILD_TYPE=Release \\\n'
+          new = old + '\t -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \\\n'
+          if source.count(old) != 1:
+              raise SystemExit("could not identify the pinned libc++ CMake configure flags")
+          script.write_text(source.replace(old, new))
+          PY
+          PS5_PAYLOAD_SDK="$sdk_root" bash .build/ps5-payload-sdk-source/libcxx.sh
+          test -f "$sdk_root/target/include/c++/v1/cstddef"
+          test -f "$sdk_root/target/include/c++/v1/array"
+          test -f "$sdk_root/target/include/c++/v1/atomic"
+          test -f "$sdk_root/target/include/c++/v1/string_view"
+
+          # The SDK exposes SCE imports as shared stub libraries under target/lib.
+          # Add that search path and the three native networking modules used by NESTS.
+          python3 - "$builder/tools/build.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old_link = '"$sdk_root/bin/prospero-lld" -T'
+          old_end = '    --as-needed "$sdk_root"/target/lib/*.so'
+          if source.count(old_link) != 1 or source.count(old_end) != 1:
+              raise SystemExit("expected native linker arguments were not found exactly once")
+          source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
+          new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + chr(10) + '    --as-needed "$sdk_root"/target/lib/*.so'
+          source = source.replace(old_end, new_end, 1)
+          path.write_text(source)
+          PY
+
+          # SDL2 is deliberately configured with SDL_SYSTEM_ICONV=OFF and its
+          # own src/stdlib/SDL_iconv.c fallback. Do not pull in PacBrew's static
+          # libiconv, which references locale symbols not exported by this PS5 SDK.
+          python3 - "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old = 'libs = []\nfor flag in raw_libs:\n'
+          new = (
+              'if "sdl2" in modules:\n'
+              '    dropped = [flag for flag in raw_libs if flag in ("-liconv", "-l:libiconv.a") or "libiconv.a" in flag.lower()]\n'
+              '    raw_libs = [flag for flag in raw_libs if flag not in dropped]\n'
+              '    if any("iconv" in flag.lower() for flag in raw_libs):\n'
+              '        raise SystemExit(f"unexpected iconv dependency remains in SDL2 link flags: {raw_libs}")\n'
+              '    print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)\n'
+              + old
+          )
+          if source.count(old) != 1:
+              raise SystemExit("could not locate the pinned PacBrew resolver block")
+          path.write_text(source.replace(old, new, 1))
+          PY
+          for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
+            test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
+              echo "Missing PS5 SDK import stub: lib${library}.so" >&2
+              exit 1
+            }
+          done
+          rsvg-convert -w 512 -h 512 -o "$builder/sce_sys/icon0.png" preview/nests-mark.svg
+          rm -f "$builder/sce_sys/pic0.dds" "$builder/sce_sys/pic1.dds" "$builder/sce_sys/snd0.at9"
+      - name: Configure NESTS development title identity
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make init TITLE_ID=PPSA91473 APP_NAME="NESTS Retro Game Library" CONTENT_SUFFIX=NESTSRETRO000001
+      - name: Cross-compile and create compressed FFPFSC image
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make PACBREW_PACKAGES=sdl2 ffpfsc
+      - name: Record artifact provenance and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .build/ps5-native-app-boilerplate/dist
+          sha256sum PPSA91473.ffpfsc > SHA256SUMS
+          {
+            echo "project=NESTS"
+            echo "source_commit=$GITHUB_SHA"
+            echo "builder_repository=drakmor/ps5-native-app-boilerplate"
+            echo "builder_commit=470695e0c557f99ff2df0e36e4df713c5e636526"
+            echo "title_id=PPSA91473"
+            echo "format=PS5 homebrew FFPFSC filesystem image"
+            echo "firmware_hardware_validation=NOT_RUN"
+          } > BUILD-INFO.txt
+      - name: Upload native PS5 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NESTS-native-PPSA91473-${{ github.sha }}
+          path: |
+            .build/ps5-native-app-boilerplate/dist/PPSA91473.ffpfsc
+            .build/ps5-native-app-boilerplate/dist/SHA256SUMS
+            .build/ps5-native-app-boilerplate/dist/BUILD-INFO.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+ >&2 || true
+              exit 1
+            fi
             export DESTDIR="$pacbrew_sysroot"
             "$MAKE" -C build install
           )
