@@ -113,7 +113,7 @@ jobs:
           cp native/ps5/http_download.cpp native/ps5/http_download.hpp "$builder/src/"
           rm -f "$builder/src/demo_renderer.cpp" "$builder/src/demo_renderer.hpp"
           # Build the public SDK import stubs missing from its binary release archive.
-          sdk_root="$builder/.deps/native/ps5-payload-sdk"
+          sdk_root="$GITHUB_WORKSPACE/$builder/.deps/native/ps5-payload-sdk"
           make -C .build/ps5-payload-sdk-source/sce_stubs \
             LLVM_CONFIG=clang-18 LLVM_BINDIR=/usr/bin CC=clang-18 LD=ld.lld-18 \
             DESTDIR="$sdk_root" install
