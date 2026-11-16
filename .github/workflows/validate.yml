@@ -139,6 +139,20 @@ jobs:
           sdl_source="$GITHUB_WORKSPACE/.build/ps5-sdl2-source"
           patch -d "$sdl_source" -Np1 -i \
             "$GITHUB_WORKSPACE/.build/pacbrew-recipes/SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch"
+          # Some generated SDL config headers still select the libiconv branch despite
+          # SDL_SYSTEM_ICONV=OFF. Force SDL's bundled portable converter on this target.
+          python3 - "$sdl_source/src/stdlib/SDL_iconv.c" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old = "#if defined(HAVE_ICONV) && defined(HAVE_ICONV_H)"
+          new = "#if defined(HAVE_ICONV) && defined(HAVE_ICONV_H) && !defined(NESTS_FORCE_PORTABLE_ICONV)"
+          if source.count(old) != 1:
+              raise SystemExit("could not locate SDL_iconv.c system-iconv guard")
+          path.write_text(source.replace(old, new, 1))
+          PY
           make -C .build/ps5-payload-sdk-source/host DESTDIR="$sdk_root" install
           make -C .build/ps5-payload-sdk-source/include DESTDIR="$sdk_root" install
           test -f "$sdk_root/target/include/unistd.h"
@@ -152,6 +166,7 @@ jobs:
             "$CMAKE" -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+              -DCMAKE_C_FLAGS=-DNESTS_FORCE_PORTABLE_ICONV=1 \
               -DHAVE_PTHREADS=ON \
               -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
               -DHAVE_ICONV=OFF -DHAVE_ICONV_H=OFF -DSDL_USE_LIBICONV=OFF \
