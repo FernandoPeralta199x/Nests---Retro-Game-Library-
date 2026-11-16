@@ -238,16 +238,16 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text()
-          old = 'libs = []\\nfor flag in raw_libs:\\n'
-          new = (
-              'if "sdl2" in modules:\\n'
-              '    dropped = [flag for flag in raw_libs if flag in ("-liconv", "-l:libiconv.a") or "libiconv.a" in flag.lower()]\\n'
-              '    raw_libs = [flag for flag in raw_libs if flag not in dropped]\\n'
-              '    if any("iconv" in flag.lower() for flag in raw_libs):\\n'
-              '        raise SystemExit(f"unexpected iconv dependency remains in SDL2 link flags: {raw_libs}")\\n'
-              '    print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)\\n'
-              + old
-          )
+          nl = chr(10)
+          old = "libs = []" + nl + "for flag in raw_libs:" + nl
+          new = nl.join([
+              'if "sdl2" in modules:',
+              '    dropped = [flag for flag in raw_libs if flag in ("-liconv", "-l:libiconv.a") or "libiconv.a" in flag.lower()]',
+              '    raw_libs = [flag for flag in raw_libs if flag not in dropped]',
+              '    if any("iconv" in flag.lower() for flag in raw_libs):',
+              '        raise SystemExit(f"unexpected iconv dependency remains in SDL2 link flags: {raw_libs}")',
+              '    print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)',
+          ]) + nl + old
           if source.count(old) != 1:
               raise SystemExit("could not locate the pinned PacBrew resolver block")
           path.write_text(source.replace(old, new, 1))
