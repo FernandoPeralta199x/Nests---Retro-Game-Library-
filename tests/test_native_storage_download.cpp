@@ -186,6 +186,9 @@ int main() {
           "cancel state is reported");
     cancel.store(false);
 
+    // Remove the previously downloaded fixture before simulating USB unmount.
+    check(::unlink(expected_path) == 0, "remove previously downloaded fixture");
+
     // A mount that has disappeared or lost write access is not selected as available.
     nests::StorageVolume missing_volume{};
     check(!nests::find_storage_volume(volumes, count, "usb9", &missing_volume),

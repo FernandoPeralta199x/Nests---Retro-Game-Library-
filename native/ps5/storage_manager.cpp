@@ -274,6 +274,7 @@ bool build_download_paths(const StorageVolume &volume,
                           char *partial_path, std::size_t partial_capacity) noexcept {
     if (final_path == nullptr || partial_path == nullptr ||
         final_capacity == 0 || partial_capacity == 0 ||
+        !is_safe_path_segment(console_slug) ||
         !is_safe_download_filename(file_name)) return false;
 
     char directory[320]{};
