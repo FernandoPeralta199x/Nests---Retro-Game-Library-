@@ -163,6 +163,14 @@ jobs:
           "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
           sdl_pc="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig/sdl2.pc"
           test -f "$sdl_pc"
+          (
+            export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
+            export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
+            export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
+            echo "Rebuilt SDL2 pkg-config file: $(pkg-config --variable=pcfiledir sdl2)/sdl2.pc"
+            echo "Rebuilt SDL2 private requirements: $(pkg-config --print-requires-private sdl2)"
+            echo "Rebuilt SDL2 static link flags: $(pkg-config --static --libs sdl2)"
+          )
           if grep -q -- '-liconv' "$sdl_pc"; then
             echo "Rebuilt SDL2 still exposes libiconv in its static link flags" >&2
             exit 1
