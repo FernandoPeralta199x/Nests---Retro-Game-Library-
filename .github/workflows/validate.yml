@@ -85,6 +85,13 @@ jobs:
           ref: 470695e0c557f99ff2df0e36e4df713c5e636526
           path: .build/ps5-native-app-boilerplate
           persist-credentials: false
+      - name: Checkout pinned PS5 SDK import stub sources
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/sdk
+          ref: 4eb701204fc3f8d31e84cf8ca272974e2be9c867
+          path: .build/ps5-payload-sdk-source
+          persist-credentials: false
       - name: Set up Python for packaging
         uses: actions/setup-python@v5
         with:
@@ -105,6 +112,11 @@ jobs:
           cp native/ps5/sha256.cpp native/ps5/sha256.hpp "$builder/src/"
           cp native/ps5/http_download.cpp native/ps5/http_download.hpp "$builder/src/"
           rm -f "$builder/src/demo_renderer.cpp" "$builder/src/demo_renderer.hpp"
+          # Build the public SDK import stubs missing from its binary release archive.
+          sdk_root="$builder/.deps/native/ps5-payload-sdk"
+          make -C .build/ps5-payload-sdk-source/sce_stubs \
+            LLVM_CONFIG=clang-18 LLVM_BINDIR=/usr/bin CC=clang-18 LD=ld.lld-18 \
+            DESTDIR="$sdk_root" install
           # The SDK exposes SCE imports as shared stub libraries under target/lib.
           # Add that search path and the three native networking modules used by NESTS.
           python3 - "$builder/tools/build.sh" <<'PY'
