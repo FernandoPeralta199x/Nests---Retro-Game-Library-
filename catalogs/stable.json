@@ -1,0 +1,149 @@
+{
+  "schema_version": 2,
+  "catalog_id": "nests-community-stable",
+  "catalog_version": 4,
+  "generated_at": "2026-11-16T12:30:00Z",
+  "catalog_name": "NESTS — Catálogo de demonstração",
+  "description": "Itens fictícios para validar a interface. Nenhum arquivo comercial ou ROM está disponível.",
+  "trusted_download_hosts": [],
+  "items": [
+    {
+      "id": "orbit-runner-nes",
+      "title": "Orbit Runner",
+      "system": "NES",
+      "genre": "Plataforma",
+      "year": 2025,
+      "region": "Global",
+      "description": "Projeto independente fictício usado para testar a apresentação do catálogo NESTS.",
+      "cover_url": null,
+      "format": ".nes",
+      "size_bytes": 196608,
+      "source_name": "NESTS UI Demo",
+      "source_url": null,
+      "download_url": null,
+      "distribution_status": "demo_only",
+      "rights": {
+        "license_id": null,
+        "license_url": null,
+        "evidence_url": null,
+        "redistribution_allowed": false
+      },
+      "sha256": null
+    },
+    {
+      "id": "pixel-harbor-gb",
+      "title": "Pixel Harbor",
+      "system": "Game Boy",
+      "genre": "Aventura",
+      "year": 2024,
+      "region": "Global",
+      "description": "Exemplo fictício de jogo portátil. A versão final apresentará licença, autoria e página oficial.",
+      "cover_url": null,
+      "format": ".gb",
+      "size_bytes": 524288,
+      "source_name": "NESTS UI Demo",
+      "source_url": null,
+      "download_url": null,
+      "distribution_status": "demo_only",
+      "rights": {
+        "license_id": null,
+        "license_url": null,
+        "evidence_url": null,
+        "redistribution_allowed": false
+      },
+      "sha256": null
+    },
+    {
+      "id": "neon-circuit-md",
+      "title": "Neon Circuit",
+      "system": "Mega Drive",
+      "genre": "Ação",
+      "year": 2025,
+      "region": "Global",
+      "description": "Título demonstrativo para testar busca, filtros, favoritos e detalhes.",
+      "cover_url": null,
+      "format": ".md",
+      "size_bytes": 1258291,
+      "source_name": "NESTS UI Demo",
+      "source_url": null,
+      "download_url": null,
+      "distribution_status": "demo_only",
+      "rights": {
+        "license_id": null,
+        "license_url": null,
+        "evidence_url": null,
+        "redistribution_allowed": false
+      },
+      "sha256": null
+    },
+    {
+      "id": "moonlight-quest-snes",
+      "title": "Moonlight Quest",
+      "system": "SNES",
+      "genre": "RPG",
+      "year": 2023,
+      "region": "Global",
+      "description": "Item de demonstração. Não há imagem de ROM nem link de download associado.",
+      "cover_url": null,
+      "format": ".sfc",
+      "size_bytes": 2202009,
+      "source_name": "NESTS UI Demo",
+      "source_url": null,
+      "download_url": null,
+      "distribution_status": "demo_only",
+      "rights": {
+        "license_id": null,
+        "license_url": null,
+        "evidence_url": null,
+        "redistribution_allowed": false
+      },
+      "sha256": null
+    },
+    {
+      "id": "tiny-tactics-gba",
+      "title": "Tiny Tactics",
+      "system": "GBA",
+      "genre": "Estratégia",
+      "year": 2024,
+      "region": "Global",
+      "description": "Item fictício de catálogo para testar a organização multi-console.",
+      "cover_url": null,
+      "format": ".gba",
+      "size_bytes": 786432,
+      "source_name": "NESTS UI Demo",
+      "source_url": null,
+      "download_url": null,
+      "distribution_status": "demo_only",
+      "rights": {
+        "license_id": null,
+        "license_url": null,
+        "evidence_url": null,
+        "redistribution_allowed": false
+      },
+      "sha256": null
+    },
+    {
+      "id": "blue-horizon-sms",
+      "title": "Blue Horizon",
+      "system": "Master System",
+      "genre": "Ação",
+      "year": 2025,
+      "region": "Global",
+      "description": "Exemplo demonstrativo para o filtro de Master System.",
+      "cover_url": null,
+      "format": ".sms",
+      "size_bytes": 262144,
+      "source_name": "NESTS UI Demo",
+      "source_url": null,
+      "download_url": null,
+      "distribution_status": "demo_only",
+      "rights": {
+        "license_id": null,
+        "license_url": null,
+        "evidence_url": null,
+        "redistribution_allowed": false
+      },
+      "sha256": null
+    }
+  ]
+}
