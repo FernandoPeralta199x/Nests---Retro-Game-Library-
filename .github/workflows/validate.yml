@@ -172,7 +172,12 @@ jobs:
               -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
               -B build -S .
             "$MAKE" -C build
-            if nm -u build/libSDL2.a | grep -Eq '(^|[[:space:]])_?libiconv(_open|_close)?
+            if nm -u build/libSDL2.a | grep -q libiconv; then
+              echo "SDL2 archive still references external libiconv" >&2
+              nm -u build/libSDL2.a | grep libiconv >&2 || true
+              exit 1
+            fi
+            export DESTDIR="$pacbrew_sysroot"
             "$MAKE" -C build install
           )
           "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
@@ -211,24 +216,28 @@ jobs:
 
           # The SDK exposes SCE imports as shared stub libraries under target/lib.
           # Add that search path and the three native networking modules used by NESTS.
-          python3 - "$builder/tools/build.sh" "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
+          python3 - "$builder/tools/build.sh" <<'PY'
           from pathlib import Path
           import sys
 
-          linker_path = Path(sys.argv[1])
-          linker_source = linker_path.read_text()
+          path = Path(sys.argv[1])
+          source = path.read_text()
           old_link = '"$sdk_root/bin/prospero-lld" -T'
           old_end = '    --as-needed "$sdk_root"/target/lib/*.so'
-          if linker_source.count(old_link) != 1 or linker_source.count(old_end) != 1:
+          if source.count(old_link) != 1 or source.count(old_end) != 1:
               raise SystemExit("expected native linker arguments were not found exactly once")
-          linker_source = linker_source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
+          source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
           new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + chr(10) + '    --as-needed "$sdk_root"/target/lib/*.so'
-          linker_source = linker_source.replace(old_end, new_end, 1)
-          linker_path.write_text(linker_source)
-
+          source = source.replace(old_end, new_end, 1)
+          path.write_text(source)
+          PY
           # SDL uses its bundled converter, so remove the redundant static iconv flag.
-          resolver_path = Path(sys.argv[2])
-          resolver_source = resolver_path.read_text()
+          python3 - "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
           old = 'libs = []\\nfor flag in raw_libs:\\n'
           new = (
               'if "sdl2" in modules:\\n'
@@ -239,9 +248,9 @@ jobs:
               '    print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)\\n'
               + old
           )
-          if resolver_source.count(old) != 1:
+          if source.count(old) != 1:
               raise SystemExit("could not locate the pinned PacBrew resolver block")
-          resolver_path.write_text(resolver_source.replace(old, new, 1))
+          path.write_text(source.replace(old, new, 1))
           PY
           for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
             test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
