@@ -1,12 +1,22 @@
+# Changelog
+
+## 0.7 — USB storage and native download pipeline
+
+- Added a native storage manager for the title-local internal data root and conditional USB mount points `/usb0`–`/usb7`.
+- Added runtime directory/write probes, available-space reporting, persisted volume selection and flat/per-console path generation.
+- Added a system `sceHttp`/`sceSsl` HTTPS download service with certificate verification flags, direct-host allowlisting, size limits, progress, cancellation checks and streaming SHA-256.
+- Downloads are written to a temporary `.part` file and promoted only after size/hash verification; partial files are deleted on failure.
+- Added a native Download Manager view and DualSense actions for settings, start and cancellation.
+- Added host tests with mocked SCE HTTP responses for USB/internal path selection, settings persistence, safe paths, SHA-256, successful transfer, hash mismatch, redirects, cancellation and removed storage.
+- Native signed-catalog parsing/Ed25519 verification is not yet wired; the six demo records remain non-downloadable.
+- GitHub Actions now cross-compiles against a pinned PS5 build workspace and generates a `.ffpfsc` artifact; real SCE TLS, USB mount behavior and PS5 13.60 hardware validation remain separate NOT RUN gates.
+
 ## 0.6.1 — file storage preference
 
 - Added a file-storage section to Settings with the PS5 destination root and organization mode.
 - Added native persistent setting for a single ROM folder or per-console subfolders.
 - Native shell creates the title-local /download0/nests/roms/ directory and stores the organization preference atomically.
-- External USB storage remains unavailable pending mount and permission validation on firmware 13.60.
-- The native downloader is still not implemented; this setting prepares its destination and does not claim that ROM downloads are active.
-
-# Changelog
+- External USB storage remained unavailable pending mount and permission validation on firmware 13.60.
 
 ## 0.6 — repository source baseline + native shell proof of concept
 
@@ -16,7 +26,6 @@
 - Added GitHub Actions to validate the central catalog and run host tests.
 - Added an SDL2 native shell source with controller navigation and atomic favorites persistence in /download0/nests/.
 - Added reproducible local development and native integration instructions.
-- Network transfer, native TLS, Ed25519 verification, archive extraction and emulator launching remain disabled/not implemented.
 - Firmware 13.60 hardware validation remains NOT RUN.
 
 ## 0.5 — native local library milestone
@@ -29,7 +38,6 @@
 - Added central catalog startup/focus/periodic refresh with ETag conditional requests.
 - Restricted the local development catalog server to loopback by default and narrowed CORS.
 - Added a firmware 13.60 hardware test plan.
-- Native downloads remain disabled until TLS, pinned Ed25519 verification, streaming SHA-256 and atomic promotion are implemented and validated.
 
 ## 0.4 — signed catalog foundation
 

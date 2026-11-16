@@ -1,47 +1,60 @@
-# Native PS5 integration — initial shell milestone
+# Native PS5 integration — storage and download milestone
 
 ## Current status
 
-The native shell source in native/ps5 is an SDL2-based proof of concept. It is separate from the browser preview. It demonstrates a TV-sized game catalog, D-pad navigation, confirm/back actions and favorites persisted under the title-local /download0/nests/ directory.
+The NESTS native shell has an SDL2 store view, local favorites, a native storage-volume manager and a first HTTPS download service. GitHub Actions has a pinned cross-build and `.ffpfsc` packaging job; its artifact is still a homebrew filesystem image, not a Sony-signed retail PKG.
 
-This source has not yet been built with the PS5 cross-toolchain or executed on firmware 13.60. A host-side SDL build is not proof of console compatibility.
+The system APIs below are based on the public PS5 native app boilerplate's networking recipe and update-check example. That recipe demonstrates `sceHttp`/`sceSsl` in a sandboxed native title and warns that the same route fails when the app is elevated. NESTS must remain sandboxed for this transport unless a separate verified network implementation is adopted.
+
+## Storage model
+
+- Internal destination: `/download0/nests/roms/`.
+- Candidate USB roots: `/usb0` through `/usb7`.
+- A candidate is listed only after runtime checks that it is a directory, app-readable, and able to create, write, sync and remove a probe file under `nests/roms`.
+- The selected volume ID and layout mode are saved atomically to `/download0/nests/settings.txt`.
+- The layout is either flat (`roms/<filename>`) or per console (`roms/<console>/<filename>`).
+
+The scan only reports paths visible to the title. External volume visibility and write permissions can vary by firmware, loader and app context. USB selection and disconnection/reconnection must be tested on the physical PS5 13.60. The downloader rechecks the selected root and destination before and during the operation; it does not silently switch to another volume.
+
+## Download transport
+
+The first downloader uses system `sceNetPoolCreate`, `sceSslInit`, `sceHttpInit`, `sceHttpCreateTemplate`, `sceHttpCreateConnectionWithURL` and `sceHttpCreateRequestWithURL` calls. It enables the platform HTTPS verification flags (server certificate, hostname, validity period, known CA and SNI), disables automatic redirects, sets 15-second timeouts and accepts direct HTTPS HTTP 200 responses only.
+
+The download worker:
+1. validates HTTPS URL and exact host against the trusted catalog host;
+2. requires explicit redistribution permission, license/evidence checks and a verified catalog-signature flag;
+3. verifies path segments, expected size (up to 2 GiB), and SHA-256 syntax;
+4. checks the selected storage is still mounted/writable and has enough free space;
+5. writes to a unique `.part` file using a bounded 64 KiB buffer;
+6. updates atomic progress and checks cancellation between HTTP reads;
+7. verifies the exact received size and full SHA-256, then fsyncs and renames the file to its final name;
+8. deletes partial output on any failure.
+
+Redirects, insecure HTTP, untrusted hosts, missing rights evidence, bad hashes, short/oversized transfers, existing destination files and removed storage fail closed. Cancellation can take up to the active HTTP read timeout to be observed.
+
+## What is not yet connected
+
+The downloader API is implemented and has host tests, but the native catalog parser and Ed25519 verification are not yet wired to it. The current six demo entries have null download specs, so they are deliberately not downloadable. A later milestone must parse the signed catalog, validate the signature against a pinned public key, bind license/evidence metadata, and only then create trusted `DownloadSpec` objects.
+
+Archive extraction, local ROM scanning, emulator discovery and game launching are also not implemented.
 
 ## Build environment
 
-Use the public ps5-native-app-boilerplate as the build workspace. It provides the PS5 native container, toolchain bootstrap, linker and package assembly scripts. Do not copy Pegasus DL+ source or assets.
+Use [drakmor/ps5-native-app-boilerplate](https://github.com/drakmor/ps5-native-app-boilerplate) at pinned commit `470695e0c557f99ff2df0e36e4df713c5e636526` as the build workspace. The workflow copies all NESTS native sources into its `src/`, replaces the template launcher icon with the NESTS mark, configures the development title ID `PPSA91473`, and runs `make PACBREW_PACKAGES=sdl2 ffpfsc`. Confirm the title ID is unique before installation.
 
-1. Clone https://github.com/drakmor/ps5-native-app-boilerplate.
-2. Install its documented Ubuntu/WSL prerequisites.
-3. Copy native/ps5/main.cpp from this repository over the boilerplate's src/main.cpp.
-4. Configure a unique PPSA title ID using the boilerplate's make init target.
-5. Build with PacBrew SDL2 enabled: make PACBREW_PACKAGES=sdl2 app.
-6. Build the compressed package only after the folder build succeeds: make PACBREW_PACKAGES=sdl2 ffpfsc.
-7. Inspect the package contents and digest before moving it to the console.
+```bash
+make PACBREW_PACKAGES=sdl2 app
+make PACBREW_PACKAGES=sdl2 ffpfsc
+```
 
-The boilerplate documents the SDL2 PacBrew route, but the SDL2 module and its runtime imports still require validation on the target firmware and loader combination.
+The native network service uses system SCE HTTP/SSL imports rather than adding libcurl or OpenSSL to NESTS. The cross-build must still prove those imports are available in the chosen loader/firmware environment.
 
-## Input
+## Verification boundaries
 
-The shell uses SDL_GameController events rather than hard-coded controller structure offsets. The expected mapping is D-pad for navigation, A/Cross for select, B/Circle for back, and Start for options. Validate the actual DualSense mapping on the target build; do not assume it is correct from desktop testing.
+CI performs host C++ compilation, mocked native-service tests, and a PS5 SDK cross-build/package step. A successful `.ffpfsc` build does not prove real SCE TLS behavior, USB mounts, installability or PS5 firmware 13.60 compatibility. Follow `docs/TEST_PLAN_13_60.md` and record artifact hashes and hardware evidence before marking any device gate passed.
 
-## Storage
+## References
 
-Favorites are written only to /download0/nests/favorites.txt. The write path stages a temporary file, flushes it, fsyncs it, and renames it atomically. The storage is title-local and is not a substitute for an exportable backup.
-
-## Deliberately not included
-
-- Network transport and catalog refresh in the native shell.
-- Native TLS certificate validation.
-- Native Ed25519 signature verification.
-- Streaming download and SHA-256 verification.
-- Archive extraction.
-- Emulator discovery or launching.
-
-These features must not be enabled until each platform service has a reviewed implementation and firmware-specific tests.
-
-
-## File storage preference
-
-The native shell creates `/download0/nests/roms/` when the title starts and exposes a Settings view for file organization: all ROMs in one folder or separated into console folders. The choice is saved atomically in `/download0/nests/settings.txt`.
-
-The download root is intentionally restricted to the title-local writable area documented by the native template. External USB storage is not exposed until mount discovery, write permissions and removal/reconnect behavior have been validated on the target firmware. The downloader itself is not implemented yet; the setting is groundwork for its destination.
+- https://github.com/drakmor/ps5-native-app-boilerplate
+- https://github.com/leolobato/ps5-native-app-boilerplate/blob/main/docs/RECIPES.md
+- https://github.com/leolobato/ps5-native-app-boilerplate/blob/main/examples/update-check/update_check.c

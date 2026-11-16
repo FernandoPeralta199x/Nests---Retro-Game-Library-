@@ -1,4 +1,4 @@
-name: Validate NESTS
+name: Validate and build NESTS
 
 on:
   push:
@@ -8,6 +8,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: nests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   catalog-and-tests:
@@ -40,8 +44,99 @@ jobs:
       - name: Install SDL2 development headers
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev
-      - name: Check native shell C++ syntax against SDL2
+          sudo apt-get install --yes libsdl2-dev
+      - name: Check native shell and services C++ syntax against SDL2
         run: |
           c++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -fsyntax-only \
-            $(sdl2-config --cflags) native/ps5/main.cpp
+            -I native/ps5 $(sdl2-config --cflags) \
+            native/ps5/main.cpp native/ps5/storage_manager.cpp \
+            native/ps5/sha256.cpp native/ps5/http_download.cpp
+
+  native-storage-download-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Compile native storage and download tests
+        run: |
+          mkdir -p build
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -I native/ps5 \
+            native/ps5/storage_manager.cpp \
+            native/ps5/sha256.cpp \
+            native/ps5/http_download.cpp \
+            tests/host_sce_http_stubs.cpp \
+            tests/test_native_storage_download.cpp \
+            -o build/nests-native-storage-tests
+      - name: Run native storage and download tests
+        run: ./build/nests-native-storage-tests
+
+  ps5-native-package:
+    name: Cross-compile and package PS5 native app
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout NESTS
+        uses: actions/checkout@v4
+      - name: Checkout pinned PS5 native build workspace
+        uses: actions/checkout@v4
+        with:
+          repository: drakmor/ps5-native-app-boilerplate
+          ref: 470695e0c557f99ff2df0e36e4df713c5e636526
+          path: .build/ps5-native-app-boilerplate
+          persist-credentials: false
+      - name: Set up Python for packaging
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install PS5 build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang-18 clang-format-18 clang-tidy-18 lld-18 make pkg-config \
+            tar unzip wget git python3-venv imagemagick
+      - name: Inject NESTS native sources and branding
+        shell: bash
+        run: |
+          set -euo pipefail
+          builder=".build/ps5-native-app-boilerplate"
+          cp native/ps5/main.cpp "$builder/src/main.cpp"
+          cp native/ps5/storage_manager.cpp native/ps5/storage_manager.hpp "$builder/src/"
+          cp native/ps5/sha256.cpp native/ps5/sha256.hpp "$builder/src/"
+          cp native/ps5/http_download.cpp native/ps5/http_download.hpp "$builder/src/"
+          rm -f "$builder/src/demo_renderer.cpp" "$builder/src/demo_renderer.hpp"
+          convert preview/nests-mark.jpg -auto-orient -resize 512x512^ -gravity center -extent 512x512 \
+            "$builder/sce_sys/icon0.png"
+          rm -f "$builder/sce_sys/pic0.dds" "$builder/sce_sys/pic1.dds" "$builder/sce_sys/snd0.at9"
+      - name: Configure NESTS development title identity
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make init TITLE_ID=PPSA91473 APP_NAME="NESTS Retro Game Library" CONTENT_SUFFIX=NESTSRETRO000001
+      - name: Cross-compile and create compressed FFPFSC image
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make PACBREW_PACKAGES=sdl2 ffpfsc
+      - name: Record artifact provenance and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .build/ps5-native-app-boilerplate/dist
+          sha256sum PPSA91473.ffpfsc > SHA256SUMS
+          {
+            echo "project=NESTS"
+            echo "source_commit=$GITHUB_SHA"
+            echo "builder_repository=drakmor/ps5-native-app-boilerplate"
+            echo "builder_commit=470695e0c557f99ff2df0e36e4df713c5e636526"
+            echo "title_id=PPSA91473"
+            echo "format=PS5 homebrew FFPFSC filesystem image"
+            echo "firmware_hardware_validation=NOT_RUN"
+          } > BUILD-INFO.txt
+      - name: Upload native PS5 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NESTS-native-PPSA91473-${{ github.sha }}
+          path: |
+            .build/ps5-native-app-boilerplate/dist/PPSA91473.ffpfsc
+            .build/ps5-native-app-boilerplate/dist/SHA256SUMS
+            .build/ps5-native-app-boilerplate/dist/BUILD-INFO.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

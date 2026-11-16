@@ -8,7 +8,11 @@
 
 #include <SDL.h>
 
+#include "http_download.hpp"
+#include "storage_manager.hpp"
+
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
@@ -25,13 +29,10 @@ namespace
 constexpr int screen_width = 1280;
 constexpr int screen_height = 720;
 constexpr long max_favorites_file_size = 4096;
-constexpr long max_settings_file_size = 128;
 constexpr const char *storage_directory = "/download0/nests";
 constexpr const char *favorites_path = "/download0/nests/favorites.txt";
 constexpr const char *temporary_path = "/download0/nests/favorites.tmp";
-constexpr const char *download_root = "/download0/nests/roms";
 constexpr const char *settings_path = "/download0/nests/settings.txt";
-constexpr const char *settings_temporary_path = "/download0/nests/settings.tmp";
 
 struct Game
 {
@@ -40,15 +41,16 @@ struct Game
     const char *system;
     const char *genre;
     const char *year;
+    const nests::DownloadSpec *download;
 };
 
 constexpr std::array<Game, 6> games{{
-    {"orbit-runner-nes", "ORBIT RUNNER", "NES", "PLATFORM", "2025"},
-    {"pixel-harbor-gb", "PIXEL HARBOR", "GAME BOY", "ADVENTURE", "2024"},
-    {"neon-circuit-md", "NEON CIRCUIT", "MEGA DRIVE", "ACTION", "2025"},
-    {"moonlight-quest-snes", "MOONLIGHT QUEST", "SNES", "RPG", "2023"},
-    {"tiny-tactics-gba", "TINY TACTICS", "GBA", "STRATEGY", "2024"},
-    {"blue-horizon-sms", "BLUE HORIZON", "MASTER SYSTEM", "ACTION", "2025"},
+    {"orbit-runner-nes", "ORBIT RUNNER", "NES", "PLATFORM", "2025", nullptr},
+    {"pixel-harbor-gb", "PIXEL HARBOR", "GAME BOY", "ADVENTURE", "2024", nullptr},
+    {"neon-circuit-md", "NEON CIRCUIT", "MEGA DRIVE", "ACTION", "2025", nullptr},
+    {"moonlight-quest-snes", "MOONLIGHT QUEST", "SNES", "RPG", "2023", nullptr},
+    {"tiny-tactics-gba", "TINY TACTICS", "GBA", "STRATEGY", "2024", nullptr},
+    {"blue-horizon-sms", "BLUE HORIZON", "MASTER SYSTEM", "ACTION", "2025", nullptr},
 }};
 
 struct Glyph
@@ -57,7 +59,7 @@ struct Glyph
     std::array<std::uint8_t, 7> rows;
 };
 
-constexpr std::array<Glyph, 42> glyphs{{
+constexpr std::array<Glyph, 43> glyphs{{
     {' ', {0, 0, 0, 0, 0, 0, 0}},
     {'0', {14, 17, 19, 21, 25, 17, 14}}, {'1', {4, 12, 4, 4, 4, 4, 14}},
     {'2', {14, 17, 1, 2, 4, 8, 31}}, {'3', {30, 1, 1, 14, 1, 1, 30}},
@@ -79,7 +81,7 @@ constexpr std::array<Glyph, 42> glyphs{{
     {'Y', {17, 17, 10, 4, 4, 4, 4}}, {'Z', {31, 1, 2, 4, 8, 16, 31}},
     {'-', {0, 0, 0, 31, 0, 0, 0}}, {':', {0, 4, 4, 0, 4, 4, 0}},
     {'.', {0, 0, 0, 0, 0, 4, 4}}, {'*', {0, 21, 14, 31, 14, 21, 0}},
-    {'/', {1, 1, 2, 4, 8, 16, 16}},
+    {'/', {1, 1, 2, 4, 8, 16, 16}}, {'%', {17, 2, 4, 8, 16, 17, 0}},
 }};
 
 std::array<bool, games.size()> favorites{};
@@ -88,9 +90,28 @@ bool favorites_only = false;
 bool settings_view = false;
 bool organize_by_console = true;
 bool settings_dirty = false;
-bool settings_persisted = false;
 bool running = true;
+bool downloads_view = false;
 SDL_GameController *controller = nullptr;
+
+nests::StorageVolume storage_volumes[nests::kMaxStorageVolumes]{};
+std::size_t storage_volume_count = 0;
+nests::StorageSettings storage_settings{};
+std::size_t selected_volume_index = 0;
+int settings_row = 0;
+char download_notice[192]{};
+
+struct ActiveDownload {
+    SDL_Thread *thread = nullptr;
+    nests::DownloadSpec spec{};
+    nests::StorageVolume volume{};
+    nests::StorageSettings settings{};
+    std::atomic<bool> cancel_requested{false};
+    nests::DownloadProgress progress{};
+    char error[192]{};
+};
+
+ActiveDownload active_download{};
 
 bool valid_id(const char *value) noexcept
 {
@@ -189,86 +210,148 @@ bool save_favorites() noexcept
 }
 
 
-bool ensure_download_directory() noexcept
+
+void refresh_storage() noexcept
 {
-    if (::mkdir(storage_directory, 0700) != 0 && errno != EEXIST)
-        return false;
-    if (::mkdir(download_root, 0700) != 0 && errno != EEXIST)
-        return false;
-    return true;
+    storage_volume_count = 0;
+    settings_dirty = false;
+    (void)nests::scan_default_storage(storage_volumes, nests::kMaxStorageVolumes,
+                                      &storage_volume_count);
+    (void)nests::load_storage_settings(settings_path, &storage_settings);
+    selected_volume_index = 0;
+    bool saved_volume_found = false;
+    for (std::size_t i = 0; i < storage_volume_count; ++i) {
+        if (std::strcmp(storage_volumes[i].id, storage_settings.volume_id) == 0) {
+            selected_volume_index = i;
+            saved_volume_found = true;
+            break;
+        }
+    }
+    if (!saved_volume_found && storage_volume_count > 0) {
+        (void)std::snprintf(storage_settings.volume_id, sizeof(storage_settings.volume_id),
+                            "%s", storage_volumes[0].id);
+        settings_dirty = true;
+    }
 }
 
-void load_settings() noexcept
+void select_storage_volume(int direction) noexcept
 {
-    organize_by_console = true;
-    settings_persisted = false;
-    std::FILE *file = std::fopen(settings_path, "rb");
-    if (file == nullptr)
-        return;
-    char line[64]{};
-    if (std::fseek(file, 0, SEEK_END) != 0)
-    {
-        std::fclose(file);
-        return;
-    }
-    const long file_size = std::ftell(file);
-    if (file_size < 0 || file_size > max_settings_file_size || std::fseek(file, 0, SEEK_SET) != 0)
-    {
-        std::fclose(file);
-        return;
-    }
-    if (std::fgets(line, sizeof(line), file) != nullptr)
-    {
-        const std::size_t length = std::strcspn(line, "\r\n");
-        line[length] = '\0';
-        if (std::strcmp(line, "layout=single") == 0)
-        {
-            organize_by_console = false;
-            settings_persisted = true;
-        }
-        else if (std::strcmp(line, "layout=by_console") == 0)
-        {
-            organize_by_console = true;
-            settings_persisted = true;
-        }
-    }
-    std::fclose(file);
+    if (storage_volume_count == 0) return;
+    if (direction < 0)
+        selected_volume_index = selected_volume_index == 0
+            ? storage_volume_count - 1 : selected_volume_index - 1;
+    else
+        selected_volume_index = (selected_volume_index + 1) % storage_volume_count;
+    (void)std::snprintf(storage_settings.volume_id, sizeof(storage_settings.volume_id),
+                        "%s", storage_volumes[selected_volume_index].id);
+    settings_dirty = true;
 }
 
 bool save_settings() noexcept
 {
-    if (!ensure_download_directory())
+    if (storage_volume_count == 0 || selected_volume_index >= storage_volume_count) return false;
+    if (std::strcmp(storage_settings.volume_id, storage_volumes[selected_volume_index].id) != 0)
         return false;
-    std::FILE *file = std::fopen(settings_temporary_path, "wb");
-    if (file == nullptr)
-        return false;
-    const char *value = organize_by_console ? "layout=by_console\n" : "layout=single\n";
-    bool ok = std::fputs(value, file) != EOF;
-    if (std::fflush(file) != 0)
-        ok = false;
-    if (ok && ::fsync(::fileno(file)) != 0)
-        ok = false;
-    if (std::fclose(file) != 0)
-        ok = false;
-    if (!ok)
-    {
-        (void)std::remove(settings_temporary_path);
-        return false;
-    }
-    if (::rename(settings_temporary_path, settings_path) != 0)
-    {
-        (void)std::remove(settings_temporary_path);
-        return false;
-    }
-    const int directory_fd = ::open(storage_directory, O_RDONLY);
-    if (directory_fd >= 0)
-    {
-        (void)::fsync(directory_fd);
-        (void)::close(directory_fd);
-    }
+    if (!nests::save_storage_settings(settings_path, storage_settings)) return false;
     settings_dirty = false;
-    settings_persisted = true;
     return true;
+}
+
+const char *download_state_text(nests::DownloadState state) noexcept
+{
+    switch (state) {
+    case nests::DownloadState::preparing: return "PREPARING";
+    case nests::DownloadState::connecting: return "CONNECTING";
+    case nests::DownloadState::receiving: return "RECEIVING";
+    case nests::DownloadState::verifying: return "VERIFYING SHA256";
+    case nests::DownloadState::complete: return "COMPLETE";
+    case nests::DownloadState::cancelled: return "CANCELLED";
+    case nests::DownloadState::failed: return "FAILED";
+    default: return "IDLE";
+    }
+}
+
+int download_worker(void *opaque) noexcept
+{
+    auto *job = static_cast<ActiveDownload *>(opaque);
+    const bool ok = nests::download_https_to_storage(
+        job->spec, job->volume, job->settings, job->cancel_requested,
+        job->progress, job->error, sizeof(job->error));
+    return ok ? 0 : 1;
+}
+
+void start_selected_download() noexcept
+{
+    const Game &game = games[selected_index];
+    if (game.download == nullptr) {
+        (void)std::snprintf(download_notice, sizeof(download_notice),
+                            "%s", "THIS DEMO ITEM HAS NO AUTHORIZED DOWNLOAD PACKAGE");
+        downloads_view = true;
+        return;
+    }
+
+    if (active_download.thread != nullptr) {
+        const nests::DownloadState current = active_download.progress.state.load();
+        if (current != nests::DownloadState::complete &&
+            current != nests::DownloadState::cancelled &&
+            current != nests::DownloadState::failed) {
+            (void)std::snprintf(download_notice, sizeof(download_notice),
+                                "%s", "A DOWNLOAD IS ALREADY RUNNING");
+            downloads_view = true;
+            return;
+        }
+        int result = 0;
+        SDL_WaitThread(active_download.thread, &result);
+        active_download.thread = nullptr;
+    }
+
+    nests::StorageVolume volume{};
+    if (!nests::find_storage_volume(storage_volumes, storage_volume_count,
+                                    storage_settings.volume_id, &volume)) {
+        refresh_storage();
+        (void)std::snprintf(download_notice, sizeof(download_notice),
+                            "%s", "SELECT A WRITABLE STORAGE DEVICE IN SETTINGS");
+        downloads_view = true;
+        return;
+    }
+
+    active_download.spec = *game.download;
+    active_download.volume = volume;
+    active_download.settings = storage_settings;
+    active_download.cancel_requested.store(false);
+    active_download.progress.state.store(nests::DownloadState::idle);
+    active_download.progress.received_bytes.store(0);
+    active_download.progress.expected_bytes.store(active_download.spec.expected_size);
+    active_download.error[0] = '\0';
+    active_download.thread = SDL_CreateThread(download_worker, "nests-download", &active_download);
+    if (active_download.thread == nullptr) {
+        (void)std::snprintf(download_notice, sizeof(download_notice),
+                            "%s", "COULD NOT START DOWNLOAD WORKER");
+    } else {
+        download_notice[0] = '\0';
+    }
+    downloads_view = true;
+}
+
+void cancel_download() noexcept
+{
+    if (active_download.thread == nullptr) return;
+    const nests::DownloadState current = active_download.progress.state.load();
+    if (current == nests::DownloadState::complete ||
+        current == nests::DownloadState::cancelled ||
+        current == nests::DownloadState::failed) return;
+    active_download.cancel_requested.store(true);
+    (void)std::snprintf(download_notice, sizeof(download_notice),
+                        "%s", "CANCEL REQUESTED - WAITING FOR NETWORK READ");
+}
+
+void finish_download_worker() noexcept
+{
+    if (active_download.thread == nullptr) return;
+    active_download.cancel_requested.store(true);
+    int result = 0;
+    SDL_WaitThread(active_download.thread, &result);
+    active_download.thread = nullptr;
 }
 
 const Glyph &find_glyph(char value) noexcept
@@ -398,38 +481,104 @@ void draw_scene(SDL_Renderer *renderer) noexcept
     draw_text(renderer, 34, 42, "N", 3, 245, 249, 255);
     draw_text(renderer, 82, 34, "NESTS", 2, 245, 249, 255);
     draw_text(renderer, 82, 53, "RETRO LIBRARY", 1, 120, 146, 172);
-    draw_text(renderer, 28, 126, "STORE", 1, settings_view ? 148 : 89, settings_view ? 165 : 213, settings_view ? 186 : 236);
-    draw_text(renderer, 28, 156, "HOME", 2, settings_view ? 148 : 237, settings_view ? 165 : 244, settings_view ? 186 : 250);
+    draw_text(renderer, 28, 126, "STORE", 1, (!settings_view && !downloads_view) ? 89 : 148, 213, 236);
+    draw_text(renderer, 28, 156, "HOME", 2, (!settings_view && !downloads_view) ? 237 : 148, (!settings_view && !downloads_view) ? 244 : 165, (!settings_view && !downloads_view) ? 250 : 186);
     draw_text(renderer, 28, 205, "LIBRARY", 2, 148, 165, 186);
-    draw_text(renderer, 28, 254, "FAVORITES", 1, 148, 165, 186);
+    draw_text(renderer, 28, 254, "DOWNLOADS", 1, downloads_view ? 89 : 148, downloads_view ? 213 : 165, downloads_view ? 236 : 186);
     draw_text(renderer, 28, 300, "SETTINGS", 1, settings_view ? 89 : 148, settings_view ? 213 : 165, settings_view ? 236 : 186);
+
     fill_rect(renderer, 232, 26, 1018, 118, 16, 32, 51);
     outline_rect(renderer, 232, 26, 1018, 118, 42, 70, 101);
     draw_text(renderer, 260, 48, "RETRO GAME LIBRARY", 2, 116, 197, 248);
     draw_text(renderer, 260, 78, "DISCOVER HOMEBREW AND INDEPENDENT GAMES", 1, 197, 213, 231);
-    draw_text(renderer, 260, 106, settings_view ? "NESTS APPLICATION SETTINGS" : "DEMO CATALOG - DOWNLOADS DISABLED", 1, settings_view ? 177 : 233, settings_view ? 206 : 190, settings_view ? 232 : 111);
+
     if (settings_view)
     {
         draw_text(renderer, 235, 178, "FILE STORAGE", 2, 239, 245, 251);
-        draw_text(renderer, 235, 222, "ROM DOWNLOAD DIRECTORY", 1, 132, 151, 175);
-        draw_text(renderer, 235, 254, "/DOWNLOAD0/NESTS/ROMS/", 2, 126, 199, 249);
-        draw_text(renderer, 235, 310, "FILE ORGANIZATION", 1, 132, 151, 175);
-        fill_rect(renderer, 235, 335, 930, 92, 16, 32, 51);
-        outline_rect(renderer, 235, 335, 930, 92, 55, 104, 145);
-        draw_text(renderer, 265, 354, organize_by_console ? "SEPARATE INTO CONSOLE FOLDERS" : "ALL ROMS IN ONE FOLDER", 2, 238, 246, 252);
-        draw_text(renderer, 265, 388, organize_by_console ? "EACH CONSOLE GETS ITS OWN SUBFOLDER" : "ALL ROM FILES STAY IN THE ROMS FOLDER", 1, 148, 170, 192);
-        draw_text(renderer, 235, 475, "LEFT / RIGHT: CHANGE ORGANIZATION", 1, 132, 151, 175);
-        draw_text(renderer, 235, 501, "CROSS: SAVE SETTINGS    CIRCLE: BACK", 1, 132, 151, 175);
-        draw_text(renderer, 235, 548,
-                  settings_dirty ? "UNSAVED CHANGE" : (settings_persisted ? "PREFERENCE SAVED" : "DEFAULT PREFERENCE"),
+        draw_text(renderer, 235, 222, "DOWNLOAD DESTINATION", 1, 132, 151, 175);
+        fill_rect(renderer, 225, 210, 950, 118, 16, 32, 51);
+        outline_rect(renderer, 225, 210, 950, 118, settings_row == 0 ? 55 : 42,
+                     settings_row == 0 ? 145 : 70, settings_row == 0 ? 210 : 101);
+        if (storage_volume_count == 0)
+        {
+            draw_text(renderer, 245, 254, "NO WRITABLE STORAGE FOUND", 2, 233, 190, 111);
+            draw_text(renderer, 245, 292, "CHECK INTERNAL OR USB DEVICE", 1, 148, 170, 192);
+        }
+        else if (selected_volume_index < storage_volume_count)
+        {
+            const auto &volume = storage_volumes[selected_volume_index];
+            char line[160]{};
+            (void)std::snprintf(line, sizeof(line), "DEVICE: %s", volume.label);
+            draw_text(renderer, 245, 232, line, 2, 126, 199, 249);
+            (void)std::snprintf(line, sizeof(line), "PATH: %s", volume.roms_path);
+            draw_text(renderer, 245, 266, line, 1, 197, 213, 231);
+            (void)std::snprintf(line, sizeof(line), "FREE: %llu MB",
+                static_cast<unsigned long long>(volume.free_bytes / (1024ULL * 1024ULL)));
+            draw_text(renderer, 245, 296, line, 1, 148, 170, 192);
+        }
+        else
+        {
+            draw_text(renderer, 245, 254, "SELECT A WRITABLE DEVICE", 2, 233, 190, 111);
+        }
+
+        draw_text(renderer, 235, 365, "FILE ORGANIZATION", 1, 132, 151, 175);
+        fill_rect(renderer, 235, 390, 930, 76, 16, 32, 51);
+        outline_rect(renderer, 235, 390, 930, 76, settings_row == 1 ? 55 : 42,
+                     settings_row == 1 ? 145 : 70, settings_row == 1 ? 210 : 101);
+        draw_text(renderer, 265, 407,
+                  storage_settings.separate_by_console ? "SEPARATE BY CONSOLE" : "ALL ROMS IN ONE FOLDER",
+                  2, 238, 246, 252);
+        draw_text(renderer, 265, 439,
+                  storage_settings.separate_by_console ? "NES / SNES / MEGA DRIVE / ETC" : "ALL FILES IN THE SELECTED ROMS FOLDER",
+                  1, 148, 170, 192);
+        draw_text(renderer, 235, 500, "UP DOWN: SELECT OPTION", 1, 132, 151, 175);
+        draw_text(renderer, 235, 524, "LEFT RIGHT: CHANGE VALUE", 1, 132, 151, 175);
+        draw_text(renderer, 235, 548, "CROSS: SAVE    CIRCLE: BACK", 1, 132, 151, 175);
+        draw_text(renderer, 235, 582,
+                  settings_dirty ? "UNSAVED CHANGE" : "SETTINGS LOADED",
                   1, settings_dirty ? 233 : 113, settings_dirty ? 190 : 217, settings_dirty ? 111 : 171);
-        draw_text(renderer, 235, 584, "WEB PREVIEW USES BROWSER STORAGE", 1, 126, 148, 173);
-        draw_text(renderer, 235, 610, "USB STORAGE IS NOT ENABLED IN THIS BUILD", 1, 126, 148, 173);
+        draw_text(renderer, 235, 610, "USB VOLUMES APPEAR ONLY WHEN MOUNTED AND WRITABLE", 1, 126, 148, 173);
+    }
+    else if (downloads_view)
+    {
+        draw_text(renderer, 235, 178, "DOWNLOAD MANAGER", 2, 239, 245, 251);
+        if (download_notice[0] != '\0')
+            draw_text(renderer, 235, 216, download_notice, 1, 233, 190, 111);
+        if (active_download.thread == nullptr)
+        {
+            draw_text(renderer, 235, 278, "NO ACTIVE DOWNLOAD", 2, 148, 170, 192);
+            draw_text(renderer, 235, 318, "DEMO CATALOG ITEMS DO NOT HAVE DOWNLOAD PACKAGES", 1, 126, 148, 173);
+        }
+        else
+        {
+            const nests::DownloadState status = active_download.progress.state.load();
+            const std::uint64_t expected = active_download.progress.expected_bytes.load();
+            const std::uint64_t received = active_download.progress.received_bytes.load();
+            const unsigned percent = expected == 0 ? 0U :
+                static_cast<unsigned>((received >= expected ? expected : received) * 100ULL / expected);
+            char line[160]{};
+            draw_text(renderer, 235, 230, download_state_text(status), 2, 126, 199, 249);
+            (void)std::snprintf(line, sizeof(line), "%llu / %llu MB",
+                static_cast<unsigned long long>(received / (1024ULL * 1024ULL)),
+                static_cast<unsigned long long>(expected / (1024ULL * 1024ULL)));
+            draw_text(renderer, 235, 270, line, 1, 197, 213, 231);
+            fill_rect(renderer, 235, 305, 900, 18, 27, 42, 58);
+            fill_rect(renderer, 235, 305, static_cast<int>(900U * percent / 100U), 18, 35, 143, 226);
+            (void)std::snprintf(line, sizeof(line), "%u%%", percent);
+            draw_text(renderer, 1155, 306, line, 1, 126, 199, 249);
+            if (status == nests::DownloadState::failed || status == nests::DownloadState::cancelled)
+                draw_text(renderer, 235, 365, active_download.error, 1, 233, 190, 111);
+        }
+        draw_text(renderer, 235, 500, "CROSS: DOWNLOAD SELECTED GAME", 1, 132, 151, 175);
+        draw_text(renderer, 235, 524, "TRIANGLE: CANCEL DOWNLOAD", 1, 132, 151, 175);
+        draw_text(renderer, 235, 548, "CIRCLE: BACK TO CATALOG", 1, 132, 151, 175);
+        draw_text(renderer, 235, 610, "FILES ARE PUBLISHED ONLY AFTER SIZE AND SHA256 CHECKS", 1, 126, 148, 173);
     }
     else
     {
+        draw_text(renderer, 260, 106, "DEMO CATALOG - DOWNLOADS NEED VERIFIED ITEMS", 1, 233, 190, 111);
         draw_text(renderer, 235, 169, favorites_only ? "YOUR FAVORITES" : "EXPLORE THE CATALOG", 2, 239, 245, 251);
-        draw_text(renderer, 235, 194, "D-PAD MOVE  CROSS FAVORITE  OPTIONS SETTINGS", 1, 132, 151, 175);
+        draw_text(renderer, 235, 194, "D-PAD MOVE  CROSS FAVORITE  SQUARE DOWNLOAD  OPTIONS SETTINGS", 1, 132, 151, 175);
         std::size_t shown = 0;
         for (std::size_t index = 0; index < games.size(); ++index)
         {
@@ -445,8 +594,9 @@ void draw_scene(SDL_Renderer *renderer) noexcept
             draw_text(renderer, 260, 315, "SELECT A GAME AND PRESS CROSS TO SAVE IT", 1, 126, 148, 173);
         }
     }
+
     fill_rect(renderer, 235, 638, 950, 1, 42, 54, 72);
-    draw_text(renderer, 235, 655, "NESTS 0.6 - LOCAL FAVORITES", 1, 105, 126, 151);
+    draw_text(renderer, 235, 655, "NESTS 0.7 - USB STORAGE AND DOWNLOAD PIPELINE", 1, 105, 126, 151);
     draw_text(renderer, 1050, 655, "13.60: NOT TESTED", 1, 233, 190, 111);
     (void)SDL_RenderPresent(renderer);
 }
@@ -470,13 +620,41 @@ void handle_key(SDL_Keycode key) noexcept
     {
         switch (key)
         {
+        case SDLK_UP:
+        case SDLK_DOWN:
+            settings_row = settings_row == 0 ? 1 : 0;
+            break;
         case SDLK_LEFT:
-        case SDLK_RIGHT: organize_by_console = !organize_by_console; settings_dirty = true; break;
+        case SDLK_RIGHT:
+            if (settings_row == 0) select_storage_volume(key == SDLK_LEFT ? -1 : 1);
+            else {
+                storage_settings.separate_by_console = !storage_settings.separate_by_console;
+                settings_dirty = true;
+            }
+            break;
         case SDLK_RETURN:
-        case SDLK_SPACE: if (!save_settings()) SDL_Log("NESTS: could not save storage settings"); break;
+        case SDLK_SPACE:
+            if (!save_settings())
+                SDL_Log("NESTS: could not save storage settings");
+            break;
         case SDLK_ESCAPE:
         case SDLK_BACKSPACE:
-        case SDLK_TAB: settings_view = false; break;
+        case SDLK_TAB:
+            settings_view = false;
+            break;
+        default: break;
+        }
+        return;
+    }
+    if (downloads_view)
+    {
+        switch (key)
+        {
+        case SDLK_RETURN:
+        case SDLK_SPACE: start_selected_download(); break;
+        case SDLK_c: cancel_download(); break;
+        case SDLK_ESCAPE:
+        case SDLK_BACKSPACE: downloads_view = false; break;
         default: break;
         }
         return;
@@ -489,7 +667,14 @@ void handle_key(SDL_Keycode key) noexcept
     case SDLK_DOWN: move_selection(0, 1); break;
     case SDLK_RETURN:
     case SDLK_SPACE: toggle_favorite(); break;
-    case SDLK_TAB: settings_view = true; break;
+    case SDLK_x: start_selected_download(); break;
+    case SDLK_y:
+    case SDLK_d: downloads_view = true; break;
+    case SDLK_TAB:
+        refresh_storage();
+        settings_row = 0;
+        settings_view = true;
+        break;
     case SDLK_f: favorites_only = !favorites_only; normalize_selection(); break;
     case SDLK_ESCAPE:
     case SDLK_BACKSPACE: favorites_only = false; normalize_selection(); break;
@@ -528,9 +713,7 @@ int main(int, char **)
     }
 
     load_favorites();
-    load_settings();
-    if (!ensure_download_directory())
-        SDL_Log("NESTS: download directory is not currently writable");
+    refresh_storage();
     try_open_controller();
     while (running)
     {
@@ -565,10 +748,35 @@ int main(int, char **)
                 {
                     switch (event.cbutton.button)
                     {
+                    case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                        settings_row = settings_row == 0 ? 1 : 0;
+                        break;
                     case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
-                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: organize_by_console = !organize_by_console; settings_dirty = true; break;
-                    case SDL_CONTROLLER_BUTTON_A: if (!save_settings()) SDL_Log("NESTS: could not save storage settings"); break;
-                    case SDL_CONTROLLER_BUTTON_B: settings_view = false; break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                        if (settings_row == 0)
+                            select_storage_volume(event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? -1 : 1);
+                        else {
+                            storage_settings.separate_by_console = !storage_settings.separate_by_console;
+                            settings_dirty = true;
+                        }
+                        break;
+                    case SDL_CONTROLLER_BUTTON_A:
+                        if (!save_settings()) SDL_Log("NESTS: could not save storage settings");
+                        break;
+                    case SDL_CONTROLLER_BUTTON_B:
+                        settings_view = false;
+                        break;
+                    default: break;
+                    }
+                }
+                else if (downloads_view)
+                {
+                    switch (event.cbutton.button)
+                    {
+                    case SDL_CONTROLLER_BUTTON_A: start_selected_download(); break;
+                    case SDL_CONTROLLER_BUTTON_Y: cancel_download(); break;
+                    case SDL_CONTROLLER_BUTTON_B: downloads_view = false; break;
                     default: break;
                     }
                 }
@@ -581,8 +789,14 @@ int main(int, char **)
                     case SDL_CONTROLLER_BUTTON_DPAD_UP: move_selection(0, -1); break;
                     case SDL_CONTROLLER_BUTTON_DPAD_DOWN: move_selection(0, 1); break;
                     case SDL_CONTROLLER_BUTTON_A: toggle_favorite(); break;
+                    case SDL_CONTROLLER_BUTTON_X: start_selected_download(); break;
+                    case SDL_CONTROLLER_BUTTON_Y: downloads_view = true; break;
                     case SDL_CONTROLLER_BUTTON_B: favorites_only = false; normalize_selection(); break;
-                    case SDL_CONTROLLER_BUTTON_START: settings_view = true; break;
+                    case SDL_CONTROLLER_BUTTON_START:
+                        refresh_storage();
+                        settings_row = 0;
+                        settings_view = true;
+                        break;
                     default: break;
                     }
                 }
@@ -592,6 +806,7 @@ int main(int, char **)
         SDL_Delay(8);
     }
 
+    finish_download_worker();
     (void)save_favorites();
     if (controller != nullptr)
         SDL_GameControllerClose(controller);

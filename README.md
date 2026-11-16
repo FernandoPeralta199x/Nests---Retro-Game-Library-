@@ -1,8 +1,8 @@
 # NESTS — Retro Game Library
 
-**Development 0.6 · repository source baseline + native shell proof of concept**
+**Development 0.7 · USB storage selection + native HTTPS download pipeline**
 
-NESTS is a TV-first, multi-console retro homebrew catalog and personal library for a homebrew-enabled PS5. It is designed around search by game and console, artwork and metadata, favorites, local personal-file import, catalog refresh, and a secure download pipeline for content whose redistribution rights are explicitly documented.
+NESTS is a TV-first, multi-console retro homebrew catalog and personal library for a homebrew-enabled PS5. It is designed around search by game and console, artwork and metadata, favorites, local personal-file import, catalog refresh, storage selection and a secure download pipeline for content whose redistribution rights are explicitly documented.
 
 ## Product boundary
 
@@ -11,49 +11,59 @@ NESTS is a TV-first, multi-console retro homebrew catalog and personal library f
 - Personal backups imported by the user stay local and are never included in the shared catalog.
 - This project does not host, scrape, or redistribute unauthorized commercial ROMs.
 
-The central catalog currently contains six fictional demo records. No ROM file or commercial-game download URL is included, and all demo downloads are disabled.
+The central catalog still contains six fictional demo records. No ROM file or commercial-game download URL is included, and all demo downloads remain disabled.
 
-## Repository status
+## Development 0.7
 
-The Git repository is the source of truth and includes the browser preview, catalog schema, validator, regression tests, CI workflow and native SDL2 shell source. Follow docs/REPOSITORY_LAYOUT.md for local development.
-
-## Development 0.6
-
-- Browser preview loads catalogs/stable.json rather than maintaining a second hard-coded catalog.
-- Search and filters cover multiple retro systems.
-- Favorites and personal imports are kept locally in the browser preview.
-- Download controls remain disabled for demo and unverified records.
-- Catalog validator enforces HTTPS, exact host allowlisting, explicit redistribution permission, license/evidence URLs, expected size and SHA-256 for verified downloads.
-- GitHub Actions runs catalog validation and host regression tests.
-- Initial native SDL2 shell source supports TV-sized rendering, controller navigation and persistent favorites in /download0/nests/.
+- Browser preview continues to load `catalogs/stable.json` and demonstrates library/configuration behavior.
+- Native settings scan internal storage plus conditional USB mount points `/usb0` through `/usb7`; volumes are shown only when a runtime write probe succeeds.
+- The selected volume and flat/per-console layout are persisted atomically in `/download0/nests/settings.txt`.
+- Native Download Manager exposes progress/status/cancel controls through SDL2/DualSense.
+- Native downloader uses system `sceHttp`/`sceSsl` over direct HTTPS only, with platform certificate checks, exact host policy, size validation, streaming SHA-256 and temporary-file promotion.
+- Host tests cover storage selection, persistence, path traversal rejection, mocked successful transfers, redirects, bad hashes, cancellation and removed USB volumes.
+- Native catalog signature verification is not yet connected to the downloader; all current demo game entries have no download package and are blocked by design.
 
 ## PS5 13.60
 
-The native shell is not yet built, installed, or tested on a physical PS5 with firmware 13.60. Jailbreak availability does not prove native title, SDL2, loader or controller compatibility. Follow docs/TEST_PLAN_13_60.md and docs/PS5_NATIVE_INTEGRATION.md. Do not mark a hardware gate passed without an artifact digest and console evidence.
+The code has not yet been cross-compiled, installed or tested on a physical PS5 13.60. USB roots are conditional and must be checked in the real loader/title context. Host tests use mocked SCE HTTP services; they do not prove real TLS, USB mount behavior, loader imports or hardware compatibility.
+
+Follow `docs/PS5_NATIVE_INTEGRATION.md` and `docs/TEST_PLAN_13_60.md`. Do not mark a hardware gate passed without an artifact digest and console evidence.
 
 ## Local development
 
-Run the preview from the repository root:
+Run the browser preview from the repository root:
 
-    python -m http.server 8080
+```bash
+python -m http.server 8080
+```
 
-Then open http://localhost:8080/preview/.
+Open `http://localhost:8080/preview/`.
 
-Validate the central catalog and run regression tests:
+Validate the catalog and Python tests:
 
-    python tools/validate_catalog.py catalogs/stable.json
-    python -m unittest discover -s tests -v
+```bash
+python tools/validate_catalog.py catalogs/stable.json
+python -m unittest discover -s tests -v
+```
+
+Host-native storage/download tests are compiled and executed in GitHub Actions by `.github/workflows/validate.yml`.
+
+## Build target
+
+GitHub Actions cross-compiles the native shell against the pinned public [PS5 native app boilerplate](https://github.com/drakmor/ps5-native-app-boilerplate), links SDL2 from PacBrew, and creates a compressed `.ffpfsc` artifact for each successful build. The workflow uses the development title ID `PPSA91473`; confirm it is unique on the console before installation. The artifact is a homebrew filesystem image, not a Sony-signed retail PKG.
+
+```bash
+make PACBREW_PACKAGES=sdl2 app
+make PACBREW_PACKAGES=sdl2 ffpfsc
+```
+
+The SCE HTTP/SSL imports and SDL2 runtime still require target cross-build and hardware validation.
 
 ## References
 
-- PS5 native app boilerplate: https://github.com/drakmor/ps5-native-app-boilerplate
-- Pegasus DL+ (workflow reference only): https://github.com/pegasus-ps5/pegasus-dl
+- https://github.com/drakmor/ps5-native-app-boilerplate
+- https://github.com/leolobato/ps5-native-app-boilerplate/blob/main/docs/RECIPES.md
+- https://github.com/leolobato/ps5-native-app-boilerplate/blob/main/examples/update-check/update_check.c
+- https://github.com/pegasus-ps5/pegasus-dl (workflow reference only)
 
 NESTS has its own interface, catalog model and native source. It does not copy Pegasus DL+ UI or code.
-
-
-## File storage
-
-The native shell now exposes a Settings entry for the ROM destination. Its default folder is `/download0/nests/roms/`; the user can choose a single folder or per-console organization. The preference is stored in `/download0/nests/settings.txt`. The web preview only stores this preference in the browser and does not write to the PS5 filesystem.
-
-USB/external storage and the native download transport are not enabled yet. The setting prepares the native destination; it does not claim that downloading is already implemented.
