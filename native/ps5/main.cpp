@@ -24,6 +24,7 @@ namespace
 {
 constexpr int screen_width = 1280;
 constexpr int screen_height = 720;
+constexpr long max_favorites_file_size = 4096;
 constexpr const char *storage_directory = "/download0/nests";
 constexpr const char *favorites_path = "/download0/nests/favorites.txt";
 constexpr const char *temporary_path = "/download0/nests/favorites.tmp";
@@ -103,10 +104,8 @@ int game_index(const char *id) noexcept
     if (!valid_id(id))
         return -1;
     for (std::size_t index = 0; index < games.size(); ++index)
-    {
         if (std::strcmp(games[index].id, id) == 0)
             return static_cast<int>(index);
-    }
     return -1;
 }
 
@@ -116,6 +115,17 @@ void load_favorites() noexcept
     std::FILE *file = std::fopen(favorites_path, "rb");
     if (file == nullptr)
         return;
+    if (std::fseek(file, 0, SEEK_END) != 0)
+    {
+        std::fclose(file);
+        return;
+    }
+    const long file_size = std::ftell(file);
+    if (file_size < 0 || file_size > max_favorites_file_size || std::fseek(file, 0, SEEK_SET) != 0)
+    {
+        std::fclose(file);
+        return;
+    }
 
     char line[96]{};
     while (std::fgets(line, sizeof(line), file) != nullptr)
@@ -133,7 +143,6 @@ bool save_favorites() noexcept
 {
     if (::mkdir(storage_directory, 0700) != 0 && errno != EEXIST)
         return false;
-
     std::FILE *file = std::fopen(temporary_path, "wb");
     if (file == nullptr)
         return false;
@@ -210,16 +219,12 @@ void draw_text(SDL_Renderer *renderer, int x, int y, std::string_view text,
         const char value = static_cast<char>(std::toupper(static_cast<unsigned char>(raw)));
         const auto &glyph = find_glyph(value);
         for (int row = 0; row < 7; ++row)
-        {
             for (int column = 0; column < 5; ++column)
-            {
                 if ((glyph.rows[static_cast<std::size_t>(row)] & (1U << (4 - column))) != 0)
                 {
                     SDL_Rect pixel{cursor_x + column * scale, y + row * scale, scale, scale};
                     (void)SDL_RenderFillRect(renderer, &pixel);
                 }
-            }
-        }
         cursor_x += 6 * scale;
     }
 }
@@ -236,13 +241,11 @@ void normalize_selection() noexcept
     if (visible(selected_index))
         return;
     for (std::size_t index = 0; index < games.size(); ++index)
-    {
         if (visible(index))
         {
             selected_index = index;
             return;
         }
-    }
     selected_index = 0;
 }
 
@@ -314,7 +317,6 @@ void draw_scene(SDL_Renderer *renderer) noexcept
     draw_text(renderer, 260, 106, "DEMO CATALOG - DOWNLOADS DISABLED", 1, 233, 190, 111);
     draw_text(renderer, 235, 169, favorites_only ? "YOUR FAVORITES" : "EXPLORE THE CATALOG", 2, 239, 245, 251);
     draw_text(renderer, 235, 194, "D-PAD MOVE  CROSS FAVORITE  OPTIONS FILTER", 1, 132, 151, 175);
-
     std::size_t shown = 0;
     for (std::size_t index = 0; index < games.size(); ++index)
     {
@@ -341,14 +343,12 @@ void try_open_controller() noexcept
     if (controller != nullptr)
         return;
     for (int index = 0; index < SDL_NumJoysticks(); ++index)
-    {
         if (SDL_IsGameController(index) == SDL_TRUE)
         {
             controller = SDL_GameControllerOpen(index);
             if (controller != nullptr)
                 break;
         }
-    }
 }
 
 void handle_key(SDL_Keycode key) noexcept

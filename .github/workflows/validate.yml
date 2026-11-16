@@ -25,3 +25,23 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Compile Python tools
         run: python -m compileall -q tools tests
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check browser JavaScript syntax
+        run: node --check preview/app.js
+
+  native-shell-host-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install SDL2 development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev
+      - name: Check native shell C++ syntax against SDL2
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -fsyntax-only \
+            $(sdl2-config --cflags) native/ps5/main.cpp
