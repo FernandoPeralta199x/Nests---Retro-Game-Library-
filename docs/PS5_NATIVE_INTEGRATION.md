@@ -40,7 +40,7 @@ Archive extraction, local ROM scanning, emulator discovery and game launching ar
 
 ## Build environment
 
-Use [drakmor/ps5-native-app-boilerplate](https://github.com/drakmor/ps5-native-app-boilerplate) at pinned commit `470695e0c557f99ff2df0e36e4df713c5e636526` as the build workspace. The workflow copies all NESTS native sources into its `src/`, replaces the template launcher icon with the NESTS mark, configures the development title ID `PPSA91473`, and runs `make PACBREW_PACKAGES=sdl2 ffpfsc`. Confirm the title ID is unique before installation.
+Use [drakmor/ps5-native-app-boilerplate](https://github.com/drakmor/ps5-native-app-boilerplate) at pinned commit `470695e0c557f99ff2df0e36e4df713c5e636526` as the build workspace. The workflow copies all NESTS native sources into its `src/`, renders the NESTS vector logo to the required 512×512 launcher PNG, configures the development title ID `PPSA91473`, and runs `make PACBREW_PACKAGES=sdl2 ffpfsc`. Confirm the title ID is unique before installation.
 
 ```bash
 make PACBREW_PACKAGES=sdl2 app
