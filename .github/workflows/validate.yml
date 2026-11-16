@@ -118,7 +118,7 @@ jobs:
           if source.count(old_link) != 1 or source.count(old_end) != 1:
               raise SystemExit("expected native linker arguments were not found exactly once")
           source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
-          new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + '\\n    --as-needed "$sdk_root"/target/lib/*.so'
+          new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + chr(10) + '    --as-needed "$sdk_root"/target/lib/*.so'
           source = source.replace(old_end, new_end, 1)
           path.write_text(source)
           PY
