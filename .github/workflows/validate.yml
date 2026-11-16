@@ -161,10 +161,30 @@ jobs:
             "$MAKE" -C build install
           )
           "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
-          if grep -q -- '-liconv' "$pacbrew_sysroot/user/homebrew/lib/pkgconfig/sdl2.pc"; then
+          sdl_pc="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig/sdl2.pc"
+          test -f "$sdl_pc"
+          if grep -q -- '-liconv' "$sdl_pc"; then
             echo "Rebuilt SDL2 still exposes libiconv in its static link flags" >&2
             exit 1
           fi
+
+          # Install official PS5 libc++ headers/runtime; the app uses the standard
+          # header-only subset (array, atomic, string_view) plus the local new/delete shim.
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path(".build/ps5-payload-sdk-source/libcxx.sh")
+          source = script.read_text()
+          old = '\t -DCMAKE_BUILD_TYPE=Release \\\n'
+          new = old + '\t -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \\\n'
+          if source.count(old) != 1:
+              raise SystemExit("could not identify the pinned libc++ CMake configure flags")
+          script.write_text(source.replace(old, new))
+          PY
+          PS5_PAYLOAD_SDK="$sdk_root" bash .build/ps5-payload-sdk-source/libcxx.sh
+          test -f "$sdk_root/target/include/c++/v1/cstddef"
+          test -f "$sdk_root/target/include/c++/v1/array"
+          test -f "$sdk_root/target/include/c++/v1/atomic"
+          test -f "$sdk_root/target/include/c++/v1/string_view"
 
           # The SDK exposes SCE imports as shared stub libraries under target/lib.
           # Add that search path and the three native networking modules used by NESTS.
