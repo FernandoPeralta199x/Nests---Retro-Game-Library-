@@ -139,10 +139,19 @@ jobs:
           sdl_source="$GITHUB_WORKSPACE/.build/ps5-sdl2-source"
           patch -d "$sdl_source" -Np1 -i \
             "$GITHUB_WORKSPACE/.build/pacbrew-recipes/SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch"
-          # Force SDL to compile its portable UTF converter instead of iconv wrappers.
-          perl -0pi -e 's/#if defined\\(HAVE_ICONV\\) && defined\\(HAVE_ICONV_H\\)/#if defined(HAVE_ICONV) && defined(HAVE_ICONV_H) && !defined(NESTS_FORCE_PORTABLE_ICONV)/' \
-            "$sdl_source/src/stdlib/SDL_iconv.c"
-          grep -q 'NESTS_FORCE_PORTABLE_ICONV' "$sdl_source/src/stdlib/SDL_iconv.c"
+          # Force SDL's bundled UTF converter on PS5; the SDK iconv ABI is incomplete.
+          python3 - "$sdl_source/src/stdlib/SDL_iconv.c" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old = "#if defined(HAVE_ICONV) && defined(HAVE_ICONV_H)"
+          new = old + " && !defined(NESTS_FORCE_PORTABLE_ICONV)"
+          if source.count(old) != 1:
+              raise SystemExit("could not locate SDL_iconv.c system-iconv guard")
+          path.write_text(source.replace(old, new, 1))
+          PY
           make -C .build/ps5-payload-sdk-source/host DESTDIR="$sdk_root" install
           make -C .build/ps5-payload-sdk-source/include DESTDIR="$sdk_root" install
           test -f "$sdk_root/target/include/unistd.h"
@@ -159,10 +168,11 @@ jobs:
               -DCMAKE_C_FLAGS=-DNESTS_FORCE_PORTABLE_ICONV=1 \
               -DHAVE_PTHREADS=ON \
               -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
+              -DHAVE_ICONV=OFF -DHAVE_ICONV_H=OFF -DSDL_USE_LIBICONV=OFF \
               -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
               -B build -S .
             "$MAKE" -C build
-            export DESTDIR="$pacbrew_sysroot"
+            if nm -u build/libSDL2.a | grep -Eq '(^|[[:space:]])_?libiconv(_open|_close)?
             "$MAKE" -C build install
           )
           "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
@@ -216,10 +226,7 @@ jobs:
           source = source.replace(old_end, new_end, 1)
           path.write_text(source)
           PY
-
-          # SDL2 is deliberately configured with SDL_SYSTEM_ICONV=OFF and its
-          # own src/stdlib/SDL_iconv.c fallback. Do not pull in PacBrew's static
-          # libiconv, which references locale symbols not exported by this PS5 SDK.
+          # SDL now uses its bundled converter, so remove only the redundant static iconv flag.
           python3 - "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
           from pathlib import Path
           import sys
