@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080b12">
+  <meta name="description" content="NESTS — catálogo retrô multi-console e biblioteca pessoal.">
+  <title>NESTS — Retro Game Library</title>
+  <link rel="icon" href="nests-mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="#home" aria-label="NESTS início">
+      <img src="nests-mark.svg" alt="">
+      <span><strong>NESTS</strong><small>RETRO GAME LIBRARY</small></span>
+    </a>
+    <div class="nav-label">BIBLIOTECA</div>
+    <nav class="nav-list" aria-label="Navegação principal">
+      <button class="nav-item active" data-view="home"><span>⌂</span> Início</button>
+      <button class="nav-item" data-view="explore"><span>▦</span> Explorar</button>
+      <button class="nav-item" data-view="library"><span>▣</span> Minha biblioteca <b id="libraryCount">0</b></button>
+      <button class="nav-item" data-view="downloads"><span>⇩</span> Downloads <b id="downloadCount">0</b></button>
+    </nav>
+    <div class="nav-label">SISTEMA</div>
+    <nav class="nav-list">
+      <button class="nav-item" data-view="sources"><span>◎</span> Fontes e direitos</button>
+      <button class="nav-item" data-view="settings"><span>⚙</span> Configurações</button>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="connection-card">
+        <div class="connection-title"><i class="status-dot"></i><span id="connectionLabel">Catálogo local</span></div>
+        <p id="connectionText">Carregando catálogo central...</p>
+        <button id="refreshCatalog" class="subtle-button">↻ Atualizar catálogo</button>
+      </div>
+      <div class="version">NESTS PREVIEW 0.6 <span>·</span> WEB</div>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    <header class="topbar">
+      <div class="breadcrumb"><span>NESTS</span><b>/</b><strong id="currentSection">Início</strong></div>
+      <label class="searchbox">
+        <span>⌕</span>
+        <input id="searchInput" type="search" placeholder="Buscar jogo, console ou gênero..." autocomplete="off">
+        <kbd>/</kbd>
+      </label>
+      <button class="icon-button" id="searchButton" aria-label="Focar busca">⌕</button>
+      <div class="profile-mark" aria-label="Perfil local">N</div>
+    </header>
+
+    <section class="view active" id="view-home">
+      <section class="hero">
+        <div class="hero-glow"></div>
+        <div class="hero-copy">
+          <div class="overline">SUA PRÓXIMA AVENTURA COMEÇA AQUI</div>
+          <h1>O universo retrô.<br><em>Em um só lugar.</em></h1>
+          <p>Explore jogos independentes, homebrews e projetos de preservação com informações de origem e licença.</p>
+          <div class="hero-buttons">
+            <button class="button-primary" data-go="explore">Explorar catálogo <span>→</span></button>
+            <button class="button-secondary" data-go="library">Minha biblioteca</button>
+          </div>
+        </div>
+        <div class="hero-emblem"><img src="nests-mark.svg" alt=""></div>
+        <div class="hero-caption">DISCOVER <b>·</b> PRESERVE <b>·</b> PLAY</div>
+      </section>
+      <div class="section-heading">
+        <div><span class="eyebrow">DESCUBRA</span><h2>Escolha seu console</h2></div>
+        <button class="text-button" data-go="explore">Ver todos <span>→</span></button>
+      </div>
+      <div class="console-strip" id="consoleStrip"></div>
+      <div class="section-heading compact">
+        <div><span class="eyebrow">CATÁLOGO CENTRAL</span><h2>Adicionados ao catálogo</h2><p id="catalogSummary">Carregando registros...</p></div>
+        <div class="section-arrows"><button class="icon-button small" id="prevGames" aria-label="Anterior">‹</button><button class="icon-button small" id="nextGames" aria-label="Próximo">›</button></div>
+      </div>
+      <div class="game-grid" id="homeGames"></div>
+    </section>
+
+    <section class="view" id="view-explore">
+      <div class="page-heading"><div><span class="eyebrow">CATÁLOGO MULTI-CONSOLE</span><h1>Explorar jogos</h1><p>Pesquise por título, plataforma, gênero ou ano.</p></div><span class="result-count" id="resultCount">0 itens</span></div>
+      <div class="filter-toolbar">
+        <select id="systemFilter" aria-label="Filtrar por console"><option value="">Todos os consoles</option></select>
+        <select id="genreFilter" aria-label="Filtrar por gênero"><option value="">Todos os gêneros</option></select>
+        <select id="statusFilter" aria-label="Filtrar por disponibilidade"><option value="">Todos os registros</option><option value="verified">Downloads autorizados</option><option value="demo_only">Demonstração</option></select>
+        <button class="button-secondary compact-button" id="clearFilters">Limpar filtros</button>
+      </div>
+      <div class="game-grid explore-grid" id="exploreGames"></div>
+    </section>
+
+    <section class="view" id="view-library">
+      <div class="page-heading"><div><span class="eyebrow">COLEÇÃO PESSOAL</span><h1>Minha biblioteca</h1><p>Favoritos do catálogo e arquivos importados localmente.</p></div></div>
+      <div class="library-toolbar"><div class="library-tabs"><button class="tab active" data-library-tab="all">Tudo</button><button class="tab" data-library-tab="favorites">Favoritos</button><button class="tab" data-library-tab="personal">Arquivos pessoais</button></div><label class="button-primary import-button">＋ Importar arquivo<input id="personalFileInput" type="file" multiple hidden></label></div>
+      <div class="library-grid" id="libraryItems"></div>
+      <p class="privacy-note">Arquivos pessoais são armazenados somente no navegador desta prévia. Eles não são enviados ao catálogo NESTS.</p>
+    </section>
+
+    <section class="view" id="view-downloads">
+      <div class="page-heading"><div><span class="eyebrow">TRANSFERÊNCIAS</span><h1>Downloads</h1><p>Arquivos autorizados passam por validação antes de serem salvos.</p></div></div>
+      <div class="download-policy"><span class="policy-icon">✓</span><div><strong>Verificação obrigatória</strong><p>Somente itens com permissão explícita, host aprovado, tamanho esperado e SHA-256 podem ser baixados.</p></div></div>
+      <div id="downloadQueue" class="queue-list"><div class="empty-state">Sua fila está vazia.</div></div>
+    </section>
+
+    <section class="view" id="view-sources">
+      <div class="page-heading"><div><span class="eyebrow">TRANSPARÊNCIA</span><h1>Fontes e direitos</h1><p>De onde vêm os metadados e como avaliamos a distribuição.</p></div></div>
+      <div class="source-grid">
+        <article class="source-card"><div class="source-symbol">◎</div><h3>FMHY</h3><p>Índice de descoberta para localizar recursos. Uma listagem no FMHY não comprova autorização para redistribuir arquivos.</p><a href="https://fmhy.net/gaming#rom-sites" target="_blank" rel="noopener noreferrer">Abrir referência externa ↗</a></article>
+        <article class="source-card"><div class="source-symbol">⌂</div><h3>Catálogo NESTS</h3><p>Manifesto central versionado, com validação, origem, licença, evidência de distribuição e hash.</p><span class="source-state">CONTEÚDO DEMONSTRATIVO</span></article>
+        <article class="source-card"><div class="source-symbol">◇</div><h3>Biblioteca pessoal</h3><p>Importações do usuário permanecem locais e não são publicadas nem compartilhadas pelo catálogo.</p><span class="source-state">ARMAZENAMENTO LOCAL</span></article>
+      </div>
+      <div class="rights-panel"><h3>Política de distribuição</h3><ul><li>Homebrew, domínio público, open-source e freeware com autorização expressa.</li><li>Sem redistribuição de ROM comercial sem autorização.</li><li>Licença ausente ou duvidosa significa download indisponível.</li><li>Links externos são tratados como referência, nunca como prova automática de direitos.</li></ul></div>
+    </section>
+
+    <section class="view" id="view-settings">
+      <div class="page-heading"><div><span class="eyebrow">PREFERÊNCIAS</span><h1>Configurações</h1><p>Estado da prévia e informações do ambiente.</p></div></div>
+      <div class="settings-card"><div><strong>Catálogo central</strong><p id="settingsCatalog">Não carregado</p></div><button class="button-secondary" id="settingsRefresh">Atualizar</button></div>
+      <div class="settings-card"><div><strong>Controles</strong><p>Teclado: setas para navegar, Enter para selecionar, Esc para voltar. Controle: D-pad, A/Cross e B/Circle (mapeamento do navegador).</p></div></div>
+      <div class="settings-card"><div><strong>Ambiente</strong><p>Esta é uma prévia web. Não representa uma aplicação nativa nem acessa APIs do PS5.</p></div></div>
+      <div class="settings-card"><div><strong>Armazenamento</strong><p id="storageInfo">Favoritos e arquivos pessoais usam o armazenamento do navegador.</p></div><button class="button-secondary danger-button" id="clearLocalData">Limpar dados locais</button></div>
+    </section>
+
+    <footer class="main-footer"><span>NESTS © 2026</span><span>RETRO GAME LIBRARY</span><span>Prévia web · downloads de demonstração desativados</span></footer>
+  </main>
+
+  <aside class="details-panel" id="detailsPanel">
+    <div class="details-top"><span>DETALHES DO JOGO</span><button id="closeDetails" class="icon-button small" aria-label="Fechar detalhes">×</button></div>
+    <div id="gameDetails"><div class="detail-placeholder"><div class="placeholder-mark">N</div><strong>Selecione um jogo</strong><p>Os detalhes e as informações de licença aparecem aqui.</p></div></div>
+  </aside>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

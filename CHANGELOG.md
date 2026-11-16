@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6 — repository source baseline + native shell proof of concept
+
+- Added the browser preview as versioned source under preview/.
+- Added a v2 catalog JSON Schema and fail-closed Python validator.
+- Added automated regression tests for demo records, duplicate IDs, missing redistribution rights, insecure URLs and untrusted hosts.
+- Added GitHub Actions to validate the central catalog and run host tests.
+- Added an SDL2 native shell source with controller navigation and atomic favorites persistence in /download0/nests/.
+- Added reproducible local development and native integration instructions.
+- Network transfer, native TLS, Ed25519 verification, archive extraction and emulator launching remain disabled/not implemented.
+- Firmware 13.60 hardware validation remains NOT RUN.
+
 ## 0.5 — native local library milestone
 
 - Added a bounded, versioned native favorites store for /download0/nests/favorites.txt.
@@ -14,6 +25,6 @@
 
 ## 0.4 — signed catalog foundation
 
-- Added catalog v2 structure, validation and Ed25519 signing tools.
-- Added read-only catalog serving and browser-side signature verification.
+- Added catalog v2 structure, validation and Ed25519 signing workflow.
 - Added a pure C++ download policy gate and SDL2 native UI shell proof of concept.
+- The native shell is a host-tested prototype, not a firmware 13.60 compatibility claim.
