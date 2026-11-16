@@ -88,6 +88,7 @@ bool favorites_only = false;
 bool settings_view = false;
 bool organize_by_console = true;
 bool settings_dirty = false;
+bool settings_persisted = false;
 bool running = true;
 SDL_GameController *controller = nullptr;
 
@@ -200,6 +201,7 @@ bool ensure_download_directory() noexcept
 void load_settings() noexcept
 {
     organize_by_console = true;
+    settings_persisted = false;
     std::FILE *file = std::fopen(settings_path, "rb");
     if (file == nullptr)
         return;
@@ -220,9 +222,15 @@ void load_settings() noexcept
         const std::size_t length = std::strcspn(line, "\r\n");
         line[length] = '\0';
         if (std::strcmp(line, "layout=single") == 0)
+        {
             organize_by_console = false;
+            settings_persisted = true;
+        }
         else if (std::strcmp(line, "layout=by_console") == 0)
+        {
             organize_by_console = true;
+            settings_persisted = true;
+        }
     }
     std::fclose(file);
 }
@@ -259,6 +267,7 @@ bool save_settings() noexcept
         (void)::close(directory_fd);
     }
     settings_dirty = false;
+    settings_persisted = true;
     return true;
 }
 
@@ -411,7 +420,9 @@ void draw_scene(SDL_Renderer *renderer) noexcept
         draw_text(renderer, 265, 388, organize_by_console ? "EACH CONSOLE GETS ITS OWN SUBFOLDER" : "ALL ROM FILES STAY IN THE ROMS FOLDER", 1, 148, 170, 192);
         draw_text(renderer, 235, 475, "LEFT / RIGHT: CHANGE ORGANIZATION", 1, 132, 151, 175);
         draw_text(renderer, 235, 501, "CROSS: SAVE SETTINGS    CIRCLE: BACK", 1, 132, 151, 175);
-        draw_text(renderer, 235, 548, settings_dirty ? "UNSAVED CHANGE" : "PREFERENCE SAVED", 1, settings_dirty ? 233 : 113, settings_dirty ? 190 : 217, settings_dirty ? 111 : 171);
+        draw_text(renderer, 235, 548,
+                  settings_dirty ? "UNSAVED CHANGE" : (settings_persisted ? "PREFERENCE SAVED" : "DEFAULT PREFERENCE"),
+                  1, settings_dirty ? 233 : 113, settings_dirty ? 190 : 217, settings_dirty ? 111 : 171);
         draw_text(renderer, 235, 584, "WEB PREVIEW USES BROWSER STORAGE", 1, 126, 148, 173);
         draw_text(renderer, 235, 610, "USB STORAGE IS NOT ENABLED IN THIS BUILD", 1, 126, 148, 173);
     }
