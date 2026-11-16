@@ -206,15 +206,34 @@ jobs:
           old_end = '    --as-needed "$sdk_root"/target/lib/*.so'
           if source.count(old_link) != 1 or source.count(old_end) != 1:
               raise SystemExit("expected native linker arguments were not found exactly once")
-          source = source.replace(
-              old_link,
-              '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" ' +
-              '--trace-symbol=iconv_open --trace-symbol=iconv --trace-symbol=nl_langinfo ' +
-              '--trace-symbol=___mb_cur_max -T',
-              1)
+          source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
           new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + chr(10) + '    --as-needed "$sdk_root"/target/lib/*.so'
           source = source.replace(old_end, new_end, 1)
           path.write_text(source)
+          PY
+
+          # SDL2 is deliberately configured with SDL_SYSTEM_ICONV=OFF and its
+          # own src/stdlib/SDL_iconv.c fallback. Do not pull in PacBrew's static
+          # libiconv, which references locale symbols not exported by this PS5 SDK.
+          python3 - "$builder/tools/setup-pacbrew-dependencies.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old = '    libs = []\\n    for flag in raw_libs:\\n'
+          new = (
+              '    if "sdl2" in modules:\\n'
+              '        dropped = [flag for flag in raw_libs if flag in ("-liconv", "-l:libiconv.a") or "libiconv.a" in flag.lower()]\\n'
+              '        raw_libs = [flag for flag in raw_libs if flag not in dropped]\\n'
+              '        if any("iconv" in flag.lower() for flag in raw_libs):\\n'
+              '            raise SystemExit(f"unexpected iconv dependency remains in SDL2 link flags: {raw_libs}")\\n'
+              '        print(f"NESTS PS5 SDL2: removed unused libiconv flags: {dropped}", file=sys.stderr)\\n'
+              + old
+          )
+          if source.count(old) != 1:
+              raise SystemExit("could not locate the pinned PacBrew resolver block")
+          path.write_text(source.replace(old, new, 1))
           PY
           for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
             test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
