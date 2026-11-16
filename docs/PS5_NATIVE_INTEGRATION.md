@@ -38,3 +38,10 @@ Favorites are written only to /download0/nests/favorites.txt. The write path sta
 - Emulator discovery or launching.
 
 These features must not be enabled until each platform service has a reviewed implementation and firmware-specific tests.
+
+
+## File storage preference
+
+The native shell creates `/download0/nests/roms/` when the title starts and exposes a Settings view for file organization: all ROMs in one folder or separated into console folders. The choice is saved atomically in `/download0/nests/settings.txt`.
+
+The download root is intentionally restricted to the title-local writable area documented by the native template. External USB storage is not exposed until mount discovery, write permissions and removal/reconnect behavior have been validated on the target firmware. The downloader itself is not implemented yet; the setting is groundwork for its destination.

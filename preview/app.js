@@ -17,6 +17,7 @@ const state = {
   libraryTab: "all",
   queue: [],
   favorites: new Set(loadFavorites()),
+  storageLayout: loadStorageLayout(),
   lastCatalogUpdate: null,
   gamepadButtons: []
 };
@@ -28,6 +29,10 @@ function loadFavorites() {
   } catch {
     return [];
   }
+}
+
+function loadStorageLayout() {
+  return localStorage.getItem("nests:storage-layout") === "single" ? "single" : "by_console";
 }
 
 function saveFavorites() {
@@ -531,6 +536,11 @@ function updateSettings() {
   $("#catalogSummary").textContent = catalog
     ? catalog.items.length + " registros · versão " + catalog.catalog_version
     : "Carregando registros...";
+  $("#downloadDirectory").value = "/download0/nests/roms/";
+  $("#storageLayout").value = state.storageLayout;
+  $("#storagePathPreview").textContent = state.storageLayout === "by_console"
+    ? "Destino final: /download0/nests/roms/[console]/"
+    : "Destino final: /download0/nests/roms/";
 }
 
 function renderAll() {
@@ -564,6 +574,17 @@ $$(".nav-item[data-view]").forEach(button => button.addEventListener("click", ()
 $$("[data-go]").forEach(button => button.addEventListener("click", () => goToView(button.dataset.go)));
 $("#refreshCatalog").addEventListener("click", refreshCatalog);
 $("#settingsRefresh").addEventListener("click", refreshCatalog);
+$("#saveStorageSettings").addEventListener("click", () => {
+  const selected = $("#storageLayout").value;
+  if (selected !== "by_console" && selected !== "single") {
+    toast("Organização de armazenamento inválida.");
+    return;
+  }
+  state.storageLayout = selected;
+  localStorage.setItem("nests:storage-layout", selected);
+  updateSettings();
+  toast("Preferência salva nesta prévia web.");
+});
 $("#searchButton").addEventListener("click", () => $("#searchInput").focus());
 $("#searchInput").addEventListener("input", event => {
   state.search = event.target.value;

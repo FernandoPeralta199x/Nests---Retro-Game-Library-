@@ -50,3 +50,10 @@ Validate the central catalog and run regression tests:
 - Pegasus DL+ (workflow reference only): https://github.com/pegasus-ps5/pegasus-dl
 
 NESTS has its own interface, catalog model and native source. It does not copy Pegasus DL+ UI or code.
+
+
+## File storage
+
+The native shell now exposes a Settings entry for the ROM destination. Its default folder is `/download0/nests/roms/`; the user can choose a single folder or per-console organization. The preference is stored in `/download0/nests/settings.txt`. The web preview only stores this preference in the browser and does not write to the PS5 filesystem.
+
+USB/external storage and the native download transport are not enabled yet. The setting prepares the native destination; it does not claim that downloading is already implemented.

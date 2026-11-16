@@ -25,9 +25,13 @@ namespace
 constexpr int screen_width = 1280;
 constexpr int screen_height = 720;
 constexpr long max_favorites_file_size = 4096;
+constexpr long max_settings_file_size = 128;
 constexpr const char *storage_directory = "/download0/nests";
 constexpr const char *favorites_path = "/download0/nests/favorites.txt";
 constexpr const char *temporary_path = "/download0/nests/favorites.tmp";
+constexpr const char *download_root = "/download0/nests/roms";
+constexpr const char *settings_path = "/download0/nests/settings.txt";
+constexpr const char *settings_temporary_path = "/download0/nests/settings.tmp";
 
 struct Game
 {
@@ -53,7 +57,7 @@ struct Glyph
     std::array<std::uint8_t, 7> rows;
 };
 
-constexpr std::array<Glyph, 41> glyphs{{
+constexpr std::array<Glyph, 42> glyphs{{
     {' ', {0, 0, 0, 0, 0, 0, 0}},
     {'0', {14, 17, 19, 21, 25, 17, 14}}, {'1', {4, 12, 4, 4, 4, 4, 14}},
     {'2', {14, 17, 1, 2, 4, 8, 31}}, {'3', {30, 1, 1, 14, 1, 1, 30}},
@@ -75,11 +79,15 @@ constexpr std::array<Glyph, 41> glyphs{{
     {'Y', {17, 17, 10, 4, 4, 4, 4}}, {'Z', {31, 1, 2, 4, 8, 16, 31}},
     {'-', {0, 0, 0, 31, 0, 0, 0}}, {':', {0, 4, 4, 0, 4, 4, 0}},
     {'.', {0, 0, 0, 0, 0, 4, 4}}, {'*', {0, 21, 14, 31, 14, 21, 0}},
+    {'/', {1, 1, 2, 4, 8, 16, 16}},
 }};
 
 std::array<bool, games.size()> favorites{};
 std::size_t selected_index = 0;
 bool favorites_only = false;
+bool settings_view = false;
+bool organize_by_console = true;
+bool settings_dirty = false;
 bool running = true;
 SDL_GameController *controller = nullptr;
 
@@ -176,6 +184,81 @@ bool save_favorites() noexcept
         (void)::fsync(directory_fd);
         (void)::close(directory_fd);
     }
+    return true;
+}
+
+
+bool ensure_download_directory() noexcept
+{
+    if (::mkdir(storage_directory, 0700) != 0 && errno != EEXIST)
+        return false;
+    if (::mkdir(download_root, 0700) != 0 && errno != EEXIST)
+        return false;
+    return true;
+}
+
+void load_settings() noexcept
+{
+    organize_by_console = true;
+    std::FILE *file = std::fopen(settings_path, "rb");
+    if (file == nullptr)
+        return;
+    char line[64]{};
+    if (std::fseek(file, 0, SEEK_END) != 0)
+    {
+        std::fclose(file);
+        return;
+    }
+    const long file_size = std::ftell(file);
+    if (file_size < 0 || file_size > max_settings_file_size || std::fseek(file, 0, SEEK_SET) != 0)
+    {
+        std::fclose(file);
+        return;
+    }
+    if (std::fgets(line, sizeof(line), file) != nullptr)
+    {
+        const std::size_t length = std::strcspn(line, "\r\n");
+        line[length] = '\0';
+        if (std::strcmp(line, "layout=single") == 0)
+            organize_by_console = false;
+        else if (std::strcmp(line, "layout=by_console") == 0)
+            organize_by_console = true;
+    }
+    std::fclose(file);
+}
+
+bool save_settings() noexcept
+{
+    if (!ensure_download_directory())
+        return false;
+    std::FILE *file = std::fopen(settings_temporary_path, "wb");
+    if (file == nullptr)
+        return false;
+    const char *value = organize_by_console ? "layout=by_console\n" : "layout=single\n";
+    bool ok = std::fputs(value, file) != EOF;
+    if (std::fflush(file) != 0)
+        ok = false;
+    if (ok && ::fsync(::fileno(file)) != 0)
+        ok = false;
+    if (std::fclose(file) != 0)
+        ok = false;
+    if (!ok)
+    {
+        (void)std::remove(settings_temporary_path);
+        return false;
+    }
+    if (::rename(settings_temporary_path, settings_path) != 0)
+    {
+        (void)std::remove(settings_temporary_path);
+        return false;
+    }
+    const int directory_fd = ::open(storage_directory, O_RDONLY);
+    if (directory_fd >= 0)
+    {
+        (void)::fsync(directory_fd);
+        (void)::close(directory_fd);
+    }
+    settings_dirty = false;
     return true;
 }
 
@@ -306,31 +389,50 @@ void draw_scene(SDL_Renderer *renderer) noexcept
     draw_text(renderer, 34, 42, "N", 3, 245, 249, 255);
     draw_text(renderer, 82, 34, "NESTS", 2, 245, 249, 255);
     draw_text(renderer, 82, 53, "RETRO LIBRARY", 1, 120, 146, 172);
-    draw_text(renderer, 28, 126, "STORE", 1, 89, 213, 236);
-    draw_text(renderer, 28, 156, "HOME", 2, 237, 244, 250);
+    draw_text(renderer, 28, 126, "STORE", 1, settings_view ? 148 : 89, settings_view ? 165 : 213, settings_view ? 186 : 236);
+    draw_text(renderer, 28, 156, "HOME", 2, settings_view ? 148 : 237, settings_view ? 165 : 244, settings_view ? 186 : 250);
     draw_text(renderer, 28, 205, "LIBRARY", 2, 148, 165, 186);
     draw_text(renderer, 28, 254, "FAVORITES", 1, 148, 165, 186);
+    draw_text(renderer, 28, 300, "SETTINGS", 1, settings_view ? 89 : 148, settings_view ? 213 : 165, settings_view ? 236 : 186);
     fill_rect(renderer, 232, 26, 1018, 118, 16, 32, 51);
     outline_rect(renderer, 232, 26, 1018, 118, 42, 70, 101);
     draw_text(renderer, 260, 48, "RETRO GAME LIBRARY", 2, 116, 197, 248);
     draw_text(renderer, 260, 78, "DISCOVER HOMEBREW AND INDEPENDENT GAMES", 1, 197, 213, 231);
-    draw_text(renderer, 260, 106, "DEMO CATALOG - DOWNLOADS DISABLED", 1, 233, 190, 111);
-    draw_text(renderer, 235, 169, favorites_only ? "YOUR FAVORITES" : "EXPLORE THE CATALOG", 2, 239, 245, 251);
-    draw_text(renderer, 235, 194, "D-PAD MOVE  CROSS FAVORITE  OPTIONS FILTER", 1, 132, 151, 175);
-    std::size_t shown = 0;
-    for (std::size_t index = 0; index < games.size(); ++index)
+    draw_text(renderer, 260, 106, settings_view ? "NESTS APPLICATION SETTINGS" : "DEMO CATALOG - DOWNLOADS DISABLED", 1, settings_view ? 177 : 233, settings_view ? 206 : 190, settings_view ? 232 : 111);
+    if (settings_view)
     {
-        if (!visible(index))
-            continue;
-        const int column = static_cast<int>(shown % 3);
-        const int row = static_cast<int>(shown / 3);
-        draw_card(renderer, index, 235 + column * 320, 225 + row * 190);
-        ++shown;
+        draw_text(renderer, 235, 178, "FILE STORAGE", 2, 239, 245, 251);
+        draw_text(renderer, 235, 222, "ROM DOWNLOAD DIRECTORY", 1, 132, 151, 175);
+        draw_text(renderer, 235, 254, "/DOWNLOAD0/NESTS/ROMS/", 2, 126, 199, 249);
+        draw_text(renderer, 235, 310, "FILE ORGANIZATION", 1, 132, 151, 175);
+        fill_rect(renderer, 235, 335, 930, 92, 16, 32, 51);
+        outline_rect(renderer, 235, 335, 930, 92, 55, 104, 145);
+        draw_text(renderer, 265, 354, organize_by_console ? "SEPARATE INTO CONSOLE FOLDERS" : "ALL ROMS IN ONE FOLDER", 2, 238, 246, 252);
+        draw_text(renderer, 265, 388, organize_by_console ? "EACH CONSOLE GETS ITS OWN SUBFOLDER" : "ALL ROM FILES STAY IN THE ROMS FOLDER", 1, 148, 170, 192);
+        draw_text(renderer, 235, 475, "LEFT / RIGHT: CHANGE ORGANIZATION", 1, 132, 151, 175);
+        draw_text(renderer, 235, 501, "CROSS: SAVE SETTINGS    CIRCLE: BACK", 1, 132, 151, 175);
+        draw_text(renderer, 235, 548, settings_dirty ? "UNSAVED CHANGE" : "PREFERENCE SAVED", 1, settings_dirty ? 233 : 113, settings_dirty ? 190 : 217, settings_dirty ? 111 : 171);
+        draw_text(renderer, 235, 584, "WEB PREVIEW USES BROWSER STORAGE", 1, 126, 148, 173);
+        draw_text(renderer, 235, 610, "USB STORAGE IS NOT ENABLED IN THIS BUILD", 1, 126, 148, 173);
     }
-    if (shown == 0)
+    else
     {
-        draw_text(renderer, 260, 280, "NO FAVORITES YET", 2, 177, 194, 214);
-        draw_text(renderer, 260, 315, "SELECT A GAME AND PRESS CROSS TO SAVE IT", 1, 126, 148, 173);
+        draw_text(renderer, 235, 169, favorites_only ? "YOUR FAVORITES" : "EXPLORE THE CATALOG", 2, 239, 245, 251);
+        draw_text(renderer, 235, 194, "D-PAD MOVE  CROSS FAVORITE  OPTIONS SETTINGS", 1, 132, 151, 175);
+        std::size_t shown = 0;
+        for (std::size_t index = 0; index < games.size(); ++index)
+        {
+            if (!visible(index)) continue;
+            const int column = static_cast<int>(shown % 3);
+            const int row = static_cast<int>(shown / 3);
+            draw_card(renderer, index, 235 + column * 320, 225 + row * 190);
+            ++shown;
+        }
+        if (shown == 0)
+        {
+            draw_text(renderer, 260, 280, "NO FAVORITES YET", 2, 177, 194, 214);
+            draw_text(renderer, 260, 315, "SELECT A GAME AND PRESS CROSS TO SAVE IT", 1, 126, 148, 173);
+        }
     }
     fill_rect(renderer, 235, 638, 950, 1, 42, 54, 72);
     draw_text(renderer, 235, 655, "NESTS 0.6 - LOCAL FAVORITES", 1, 105, 126, 151);
@@ -353,6 +455,21 @@ void try_open_controller() noexcept
 
 void handle_key(SDL_Keycode key) noexcept
 {
+    if (settings_view)
+    {
+        switch (key)
+        {
+        case SDLK_LEFT:
+        case SDLK_RIGHT: organize_by_console = !organize_by_console; settings_dirty = true; break;
+        case SDLK_RETURN:
+        case SDLK_SPACE: if (!save_settings()) SDL_Log("NESTS: could not save storage settings"); break;
+        case SDLK_ESCAPE:
+        case SDLK_BACKSPACE:
+        case SDLK_TAB: settings_view = false; break;
+        default: break;
+        }
+        return;
+    }
     switch (key)
     {
     case SDLK_LEFT: move_selection(-1, 0); break;
@@ -361,7 +478,7 @@ void handle_key(SDL_Keycode key) noexcept
     case SDLK_DOWN: move_selection(0, 1); break;
     case SDLK_RETURN:
     case SDLK_SPACE: toggle_favorite(); break;
-    case SDLK_TAB:
+    case SDLK_TAB: settings_view = true; break;
     case SDLK_f: favorites_only = !favorites_only; normalize_selection(); break;
     case SDLK_ESCAPE:
     case SDLK_BACKSPACE: favorites_only = false; normalize_selection(); break;
@@ -400,6 +517,9 @@ int main(int, char **)
     }
 
     load_favorites();
+    load_settings();
+    if (!ensure_download_directory())
+        SDL_Log("NESTS: download directory is not currently writable");
     try_open_controller();
     while (running)
     {
@@ -430,16 +550,30 @@ int main(int, char **)
             }
             else if (event.type == SDL_CONTROLLERBUTTONDOWN)
             {
-                switch (event.cbutton.button)
+                if (settings_view)
                 {
-                case SDL_CONTROLLER_BUTTON_DPAD_LEFT: move_selection(-1, 0); break;
-                case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: move_selection(1, 0); break;
-                case SDL_CONTROLLER_BUTTON_DPAD_UP: move_selection(0, -1); break;
-                case SDL_CONTROLLER_BUTTON_DPAD_DOWN: move_selection(0, 1); break;
-                case SDL_CONTROLLER_BUTTON_A: toggle_favorite(); break;
-                case SDL_CONTROLLER_BUTTON_B: favorites_only = false; normalize_selection(); break;
-                case SDL_CONTROLLER_BUTTON_START: favorites_only = !favorites_only; normalize_selection(); break;
-                default: break;
+                    switch (event.cbutton.button)
+                    {
+                    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: organize_by_console = !organize_by_console; settings_dirty = true; break;
+                    case SDL_CONTROLLER_BUTTON_A: if (!save_settings()) SDL_Log("NESTS: could not save storage settings"); break;
+                    case SDL_CONTROLLER_BUTTON_B: settings_view = false; break;
+                    default: break;
+                    }
+                }
+                else
+                {
+                    switch (event.cbutton.button)
+                    {
+                    case SDL_CONTROLLER_BUTTON_DPAD_LEFT: move_selection(-1, 0); break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: move_selection(1, 0); break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_UP: move_selection(0, -1); break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_DOWN: move_selection(0, 1); break;
+                    case SDL_CONTROLLER_BUTTON_A: toggle_favorite(); break;
+                    case SDL_CONTROLLER_BUTTON_B: favorites_only = false; normalize_selection(); break;
+                    case SDL_CONTROLLER_BUTTON_START: settings_view = true; break;
+                    default: break;
+                    }
                 }
             }
         }

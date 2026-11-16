@@ -1,3 +1,11 @@
+## 0.6.1 — file storage preference
+
+- Added a file-storage section to Settings with the PS5 destination root and organization mode.
+- Added native persistent setting for a single ROM folder or per-console subfolders.
+- Native shell creates the title-local /download0/nests/roms/ directory and stores the organization preference atomically.
+- External USB storage remains unavailable pending mount and permission validation on firmware 13.60.
+- The native downloader is still not implemented; this setting prepares its destination and does not claim that ROM downloads are active.
+
 # Changelog
 
 ## 0.6 — repository source baseline + native shell proof of concept

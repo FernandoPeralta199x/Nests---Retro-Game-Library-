@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#080b12">
   <meta name="description" content="NESTS — catálogo retrô multi-console e biblioteca pessoal.">
   <title>NESTS — Retro Game Library</title>
-  <link rel="icon" href="nests-mark.jpg" type="image/svg+xml">
+  <link rel="icon" href="nests-mark.jpg" type="image/jpeg">
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
 </head>
@@ -115,6 +115,28 @@
     <section class="view" id="view-settings">
       <div class="page-heading"><div><span class="eyebrow">PREFERÊNCIAS</span><h1>Configurações</h1><p>Estado da prévia e informações do ambiente.</p></div></div>
       <div class="settings-card"><div><strong>Catálogo central</strong><p id="settingsCatalog">Não carregado</p></div><button class="button-secondary" id="settingsRefresh">Atualizar</button></div>
+      <div class="settings-card storage-settings-card">
+        <div class="storage-settings-heading">
+          <span class="storage-settings-icon">⇩</span>
+          <div><strong>Armazenamento de arquivos</strong><p>Defina como as ROMs serão organizadas na pasta de destino do NESTS.</p></div>
+        </div>
+        <div class="storage-settings-controls">
+          <label>Destino no PS5
+            <input id="downloadDirectory" type="text" value="/download0/nests/roms/" readonly>
+          </label>
+          <label>Organização dos arquivos
+            <select id="storageLayout">
+              <option value="by_console">Separar por console</option>
+              <option value="single">Todos na mesma pasta</option>
+            </select>
+          </label>
+        </div>
+        <div class="storage-settings-footer">
+          <p id="storagePathPreview">Destino final: /download0/nests/roms/[console]/</p>
+          <button class="button-secondary" id="saveStorageSettings" type="button">Salvar preferência</button>
+        </div>
+        <p class="settings-help">A versão nativa usará esta pasta dentro do armazenamento gravável do aplicativo. A prévia web guarda arquivos no navegador e não consegue gravar diretamente em /download0. Armazenamento USB ainda não está habilitado.</p>
+      </div>
       <div class="settings-card"><div><strong>Controles</strong><p>Teclado: setas para navegar, Enter para selecionar, Esc para voltar. Controle: D-pad, A/Cross e B/Circle (mapeamento do navegador).</p></div></div>
       <div class="settings-card"><div><strong>Ambiente</strong><p>Esta é uma prévia web. Não representa uma aplicação nativa nem acessa APIs do PS5.</p></div></div>
       <div class="settings-card"><div><strong>Armazenamento</strong><p id="storageInfo">Favoritos e arquivos pessoais usam o armazenamento do navegador.</p></div><button class="button-secondary danger-button" id="clearLocalData">Limpar dados locais</button></div>

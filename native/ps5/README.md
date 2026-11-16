@@ -40,3 +40,10 @@ Network catalog updates, TLS, Ed25519 verification, native download transport, s
 ## Host syntax check
 
 GitHub Actions runs a host-side SDL2 C++ syntax check for this file. This checks that the source is accepted by the host compiler and installed SDL2 headers; it is not a PS5 cross-compilation and does not prove firmware 13.60 compatibility.
+
+
+## File storage setting
+
+The native shell initializes the writable title-local download directory at `/download0/nests/roms/`. Open Settings with Options/Start. Left and Right switch between one folder for all files and per-console organization; Cross saves the preference and Circle returns.
+
+The setting is persisted atomically in `/download0/nests/settings.txt`. It selects file organization beneath the NESTS app storage root; it does not expose USB/external mounts. The actual native download transport is still not implemented, so this is a saved destination preference, not proof of ROM downloading.
