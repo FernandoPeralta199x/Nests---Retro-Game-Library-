@@ -35,3 +35,8 @@ Favorites are saved in /download0/nests/favorites.txt using a temporary file, ff
 ## Not implemented in this shell
 
 Network catalog updates, TLS, Ed25519 verification, native download transport, streaming SHA-256, archive extraction, ROM scanning, emulator configuration and emulator launching.
+
+
+## Host syntax check
+
+GitHub Actions runs a host-side SDL2 C++ syntax check for this file. This checks that the source is accepted by the host compiler and installed SDL2 headers; it is not a PS5 cross-compilation and does not prove firmware 13.60 compatibility.
