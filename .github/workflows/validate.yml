@@ -1,0 +1,282 @@
+name: Validate and build NESTS
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  catalog-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate central catalog
+        run: python tools/validate_catalog.py catalogs/stable.json
+      - name: Run test suite
+        run: python -m unittest discover -s tests -v
+      - name: Compile Python tools
+        run: python -m compileall -q tools tests
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check browser JavaScript syntax
+        run: node --check preview/app.js
+
+  native-shell-host-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install SDL2 development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libsdl2-dev
+      - name: Check native shell and services C++ syntax against SDL2
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -fsyntax-only \
+            -I native/ps5 $(sdl2-config --cflags) \
+            native/ps5/main.cpp native/ps5/storage_manager.cpp \
+            native/ps5/sha256.cpp native/ps5/http_download.cpp
+
+  native-storage-download-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Compile native storage and download tests
+        run: |
+          mkdir -p build
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -I native/ps5 \
+            native/ps5/storage_manager.cpp \
+            native/ps5/sha256.cpp \
+            native/ps5/http_download.cpp \
+            tests/host_sce_http_stubs.cpp \
+            tests/test_native_storage_download.cpp \
+            -o build/nests-native-storage-tests
+      - name: Run native storage and download tests
+        run: ./build/nests-native-storage-tests
+
+  ps5-native-package:
+    name: Cross-compile and package PS5 native app
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout NESTS
+        uses: actions/checkout@v4
+      - name: Checkout pinned PS5 native build workspace
+        uses: actions/checkout@v4
+        with:
+          repository: drakmor/ps5-native-app-boilerplate
+          ref: 470695e0c557f99ff2df0e36e4df713c5e636526
+          path: .build/ps5-native-app-boilerplate
+          persist-credentials: false
+      - name: Checkout pinned PS5 SDK import stub sources
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/sdk
+          ref: 4eb701204fc3f8d31e84cf8ca272974e2be9c867
+          path: .build/ps5-payload-sdk-source
+          persist-credentials: false
+      - name: Checkout pinned PS5 SDL source
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/SDL
+          ref: ee4c47dc0d617b3bc8f35108f9956baf228a1322
+          path: .build/ps5-sdl2-source
+          persist-credentials: false
+      - name: Checkout pinned PacBrew SDL2 platform patch
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/pacbrew-repo
+          ref: 722187f0ee246c0d7d57401c8a97de1c7f4e2ff0
+          path: .build/pacbrew-recipes
+          sparse-checkout: |
+            SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch
+          persist-credentials: false
+      - name: Set up Python for packaging
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install PS5 build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            clang-18 clang-format-18 clang-tidy-18 lld-18 cmake make pkg-config \
+            tar unzip wget git python3-venv librsvg2-bin
+      - name: Inject NESTS native sources and branding
+        shell: bash
+        run: |
+          set -euo pipefail
+          builder=".build/ps5-native-app-boilerplate"
+          cp native/ps5/main.cpp "$builder/src/main.cpp"
+          cp native/ps5/storage_manager.cpp native/ps5/storage_manager.hpp "$builder/src/"
+          cp native/ps5/sha256.cpp native/ps5/sha256.hpp "$builder/src/"
+          cp native/ps5/http_download.cpp native/ps5/http_download.hpp "$builder/src/"
+          rm -f "$builder/src/demo_renderer.cpp" "$builder/src/demo_renderer.hpp"
+          # Build the public SDK import stubs missing from its binary release archive.
+          sdk_root="$GITHUB_WORKSPACE/$builder/.deps/native/ps5-payload-sdk"
+          make -C .build/ps5-payload-sdk-source/sce_stubs \
+            LLVM_CONFIG=clang-18 LLVM_BINDIR=/usr/bin CC=clang-18 LD=ld.lld-18 \
+            DESTDIR="$sdk_root" install
+          # Rebuild the pinned PS5 SDL fork without libiconv; SDL has a portable UTF conversion path.
+          # Initialize PacBrew first so its package resolver reuses the rebuilt SDL2.
+          pacbrew_sysroot=$(bash "$builder/tools/setup-pacbrew-dependencies.sh" --all)
+          sdl_source="$GITHUB_WORKSPACE/.build/ps5-sdl2-source"
+          patch -d "$sdl_source" -Np1 -i \
+            "$GITHUB_WORKSPACE/.build/pacbrew-recipes/SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch"
+          # Force SDL's bundled UTF converter on PS5; the SDK iconv ABI is incomplete.
+          python3 - "$sdl_source/src/stdlib/SDL_iconv.c" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old = "#if defined(HAVE_ICONV) && defined(HAVE_ICONV_H)"
+          new = old + " && !defined(NESTS_FORCE_PORTABLE_ICONV)"
+          if source.count(old) != 1:
+              raise SystemExit("could not locate SDL_iconv.c system-iconv guard")
+          path.write_text(source.replace(old, new, 1))
+          PY
+          make -C .build/ps5-payload-sdk-source/host DESTDIR="$sdk_root" install
+          make -C .build/ps5-payload-sdk-source/include DESTDIR="$sdk_root" install
+          test -f "$sdk_root/target/include/unistd.h"
+          test -f "$sdk_root/target/include/pthread.h"
+          source "$sdk_root/toolchain/prospero.sh"
+          export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
+          export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
+          (
+            cd "$sdl_source"
+            # Static CMake probes see the SDK declarations for these four wide-string
+            # functions, but the target runtime needs SDL's implementations.
+            "$CMAKE" -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+              -DCMAKE_C_FLAGS=-DNESTS_FORCE_PORTABLE_ICONV=1 \
+              -DHAVE_PTHREADS=ON \
+              -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
+              -DHAVE_ICONV=OFF -DHAVE_ICONV_H=OFF -DSDL_USE_LIBICONV=OFF \
+              -DHAVE_WCSLCPY=OFF -DHAVE_WCSLCAT=OFF \
+              -DHAVE_WCSCASECMP=OFF -DHAVE_WCSNCASECMP=OFF \
+              -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
+              -B build -S .
+            "$MAKE" -C build
+            export DESTDIR="$pacbrew_sysroot"
+            "$MAKE" -C build install
+          )
+          "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
+          sdl_pc="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig/sdl2.pc"
+          test -f "$sdl_pc"
+          (
+            export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
+            export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
+            export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
+            echo "Rebuilt SDL2 pkg-config file: $(pkg-config --variable=pcfiledir sdl2)/sdl2.pc"
+            echo "Rebuilt SDL2 private requirements: $(pkg-config --print-requires-private sdl2)"
+            echo "Rebuilt SDL2 static link flags: $(pkg-config --static --libs sdl2)"
+          )
+          if grep -q -- '-liconv' "$sdl_pc"; then
+            echo "Rebuilt SDL2 still exposes libiconv in its static link flags" >&2
+            exit 1
+          fi
+
+          # Install official PS5 libc++ headers/runtime; the app uses the standard
+          # header-only subset (array, atomic, string_view) plus the local new/delete shim.
+          python3 - <<'PY'
+          from pathlib import Path
+          script = Path(".build/ps5-payload-sdk-source/libcxx.sh")
+          source = script.read_text()
+          old = '\t -DCMAKE_BUILD_TYPE=Release \\\n'
+          new = old + '\t -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \\\n'
+          if source.count(old) != 1:
+              raise SystemExit("could not identify the pinned libc++ CMake configure flags")
+          script.write_text(source.replace(old, new))
+          PY
+          PS5_PAYLOAD_SDK="$sdk_root" bash .build/ps5-payload-sdk-source/libcxx.sh
+          test -f "$sdk_root/target/include/c++/v1/cstddef"
+          test -f "$sdk_root/target/include/c++/v1/array"
+          test -f "$sdk_root/target/include/c++/v1/atomic"
+          test -f "$sdk_root/target/include/c++/v1/string_view"
+
+          # The SDK exposes SCE imports as shared stub libraries under target/lib.
+          # Add that search path and the three native networking modules used by NESTS.
+          python3 - "$builder/tools/build.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old_link = '"$sdk_root/bin/prospero-lld" -T'
+          old_end = '    --as-needed "$sdk_root"/target/lib/*.so'
+          if source.count(old_link) != 1 or source.count(old_end) != 1:
+              raise SystemExit("expected native linker arguments were not found exactly once")
+          source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
+          new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + chr(10) + '    --as-needed "$sdk_root"/target/lib/*.so'
+          source = source.replace(old_end, new_end, 1)
+          path.write_text(source)
+          PY
+          for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
+            test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
+              echo "Missing PS5 SDK import stub: lib${library}.so" >&2
+              exit 1
+            }
+          done
+          rsvg-convert -w 512 -h 512 -o "$builder/sce_sys/icon0.png" preview/nests-mark.svg
+          rm -f "$builder/sce_sys/pic0.dds" "$builder/sce_sys/pic1.dds" "$builder/sce_sys/snd0.at9"
+      - name: Configure NESTS development title identity
+        working-directory: .build/ps5-native-app-boilerplate
+        run: make init TITLE_ID=PPSA91473 APP_NAME="NESTS Retro Game Library" CONTENT_SUFFIX=NESTSRETRO000001
+      - name: Cross-compile and create compressed FFPFSC image
+        working-directory: .build/ps5-native-app-boilerplate
+        run: |
+          set -euo pipefail
+          pacbrew_sysroot=$(bash tools/setup-pacbrew-dependencies.sh --all)
+          sdl_archive="$pacbrew_sysroot/user/homebrew/lib/libSDL2.a"
+          cmp "$GITHUB_WORKSPACE/.build/ps5-sdl2-source/build/libSDL2.a" "$sdl_archive"
+          nm -u "$sdl_archive" > "$RUNNER_TEMP/sdl2-undefined.txt"
+          if grep -F libiconv "$RUNNER_TEMP/sdl2-undefined.txt" >&2; then
+            echo "Installed SDL2 still references external libiconv" >&2
+            exit 1
+          fi
+          make PACBREW_PACKAGES=sdl2 ffpfsc
+      - name: Record artifact provenance and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .build/ps5-native-app-boilerplate/dist
+          sha256sum PPSA91473.ffpfsc > SHA256SUMS
+          {
+            echo "project=NESTS"
+            echo "source_commit=$GITHUB_SHA"
+            echo "builder_repository=drakmor/ps5-native-app-boilerplate"
+            echo "builder_commit=470695e0c557f99ff2df0e36e4df713c5e636526"
+            echo "title_id=PPSA91473"
+            echo "format=PS5 homebrew FFPFSC filesystem image"
+            echo "firmware_hardware_validation=NOT_RUN"
+          } > BUILD-INFO.txt
+      - name: Upload native PS5 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NESTS-native-PPSA91473-${{ github.sha }}
+          path: |
+            .build/ps5-native-app-boilerplate/dist/PPSA91473.ffpfsc
+            .build/ps5-native-app-boilerplate/dist/SHA256SUMS
+            .build/ps5-native-app-boilerplate/dist/BUILD-INFO.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
