@@ -149,6 +149,7 @@ jobs:
             "$CMAKE" -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+              -DHAVE_PTHREADS=ON \
               -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
               -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
               -B build -S .
