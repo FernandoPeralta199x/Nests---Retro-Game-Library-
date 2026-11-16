@@ -187,7 +187,8 @@ int main() {
     cancel.store(false);
 
     // A mount that has disappeared or lost write access is not selected as available.
-    check(!nests::find_storage_volume(volumes, count, "usb9", &loaded),
+    nests::StorageVolume missing_volume{};
+    check(!nests::find_storage_volume(volumes, count, "usb9", &missing_volume),
           "unknown USB device does not resolve");
 
     // A device that vanishes after the scan must fail before a new transfer starts.
