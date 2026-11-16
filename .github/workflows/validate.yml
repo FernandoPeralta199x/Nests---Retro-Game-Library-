@@ -92,6 +92,22 @@ jobs:
           ref: 4eb701204fc3f8d31e84cf8ca272974e2be9c867
           path: .build/ps5-payload-sdk-source
           persist-credentials: false
+      - name: Checkout pinned PS5 SDL source
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/SDL
+          ref: ee4c47dc0d617b3bc8f35108f9956baf228a1322
+          path: .build/ps5-sdl2-source
+          persist-credentials: false
+      - name: Checkout pinned PacBrew SDL2 platform patch
+        uses: actions/checkout@v4
+        with:
+          repository: ps5-payload-dev/pacbrew-repo
+          ref: 722187f0ee246c0d7d57401c8a97de1c7f4e2ff0
+          path: .build/pacbrew-recipes
+          sparse-checkout: |
+            SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch
+          persist-credentials: false
       - name: Set up Python for packaging
         uses: actions/setup-python@v5
         with:
@@ -100,7 +116,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            clang-18 clang-format-18 clang-tidy-18 lld-18 make pkg-config \
+            clang-18 clang-format-18 clang-tidy-18 lld-18 cmake make pkg-config \
             tar unzip wget git python3-venv librsvg2-bin
       - name: Inject NESTS native sources and branding
         shell: bash
@@ -117,6 +133,33 @@ jobs:
           make -C .build/ps5-payload-sdk-source/sce_stubs \
             LLVM_CONFIG=clang-18 LLVM_BINDIR=/usr/bin CC=clang-18 LD=ld.lld-18 \
             DESTDIR="$sdk_root" install
+          # Rebuild the pinned PS5 SDL fork without libiconv; SDL has a portable UTF conversion path.
+          sdk_root="$GITHUB_WORKSPACE/$builder/.deps/native/ps5-payload-sdk"
+          pacbrew_sysroot="$GITHUB_WORKSPACE/$builder/.deps/pacbrew/v0.40.2/sysroot"
+          sdl_source="$GITHUB_WORKSPACE/.build/ps5-sdl2-source"
+          patch -d "$sdl_source" -Np1 -i \
+            "$GITHUB_WORKSPACE/.build/pacbrew-recipes/SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch"
+          source "$sdk_root/toolchain/prospero.sh"
+          export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
+          export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$pacbrew_sysroot/user/homebrew/libdata/pkgconfig"
+          (
+            cd "$sdl_source"
+            "$CMAKE" -DPKG_CONFIG_EXECUTABLE=/usr/bin/pkg-config \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DSDL_SYSTEM_ICONV=OFF -DSDL_LIBICONV=OFF \
+              -DSDL_OPENGL=YES -DSDL_OPENGLES=YES -DSDL_VULKAN=YES -DSDL_LOADSO=YES \
+              -B build -S .
+            "$MAKE" -C build
+            export DESTDIR="$pacbrew_sysroot"
+            "$MAKE" -C build install
+          )
+          "$PS5_CROSS_FIX_ROOT" "$pacbrew_sysroot/user/homebrew"
+          if grep -q -- '-liconv' "$pacbrew_sysroot/user/homebrew/lib/pkgconfig/sdl2.pc"; then
+            echo "Rebuilt SDL2 still exposes libiconv in its static link flags" >&2
+            exit 1
+          fi
+
           # The SDK exposes SCE imports as shared stub libraries under target/lib.
           # Add that search path and the three native networking modules used by NESTS.
           python3 - "$builder/tools/build.sh" <<'PY'
