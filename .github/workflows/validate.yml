@@ -139,8 +139,10 @@ jobs:
           sdl_source="$GITHUB_WORKSPACE/.build/ps5-sdl2-source"
           patch -d "$sdl_source" -Np1 -i \
             "$GITHUB_WORKSPACE/.build/pacbrew-recipes/SDL2/0001-ps5-opengl-opengles-and-vulkan-through-mesa.patch"
-          mkdir -p "$sdk_root/toolchain"
+          mkdir -p "$sdk_root/toolchain" "$sdk_root/bin"
           cp .build/ps5-payload-sdk-source/host/toolchain/prospero.* "$sdk_root/toolchain/"
+          cp .build/ps5-payload-sdk-source/host/bin/prospero-cmake \
+            .build/ps5-payload-sdk-source/host/bin/prospero-cross-fix-root "$sdk_root/bin/"
           source "$sdk_root/toolchain/prospero.sh"
           export PKG_CONFIG_SYSROOT_DIR="$pacbrew_sysroot"
           export PKG_CONFIG_LIBDIR="$pacbrew_sysroot/user/homebrew/lib/pkgconfig"
