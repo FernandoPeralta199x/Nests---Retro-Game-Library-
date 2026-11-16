@@ -113,13 +113,13 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text()
-          old_link = '"$sdk_root/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr \\\n'
-          new_link = '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T "$native/ps5-pie.ld" --eh-frame-hdr \\\n'
-          old_end = '    --as-needed "$sdk_root"/target/lib/*.so\\n'
-          new_end = '    --no-as-needed -lSceNet -lSceSsl -lSceHttp \\\n    --as-needed "$sdk_root"/target/lib/*.so\\n'
+          old_link = '"$sdk_root/bin/prospero-lld" -T'
+          old_end = '    --as-needed "$sdk_root"/target/lib/*.so'
           if source.count(old_link) != 1 or source.count(old_end) != 1:
-              raise SystemExit("expected native linker invocation was not found exactly once")
-          source = source.replace(old_link, new_link).replace(old_end, new_end)
+              raise SystemExit("expected native linker arguments were not found exactly once")
+          source = source.replace(old_link, '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T', 1)
+          new_end = '--no-as-needed -lSceNet -lSceSsl -lSceHttp ' + chr(92) + '\\n    --as-needed "$sdk_root"/target/lib/*.so'
+          source = source.replace(old_end, new_end, 1)
           path.write_text(source)
           PY
           for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
