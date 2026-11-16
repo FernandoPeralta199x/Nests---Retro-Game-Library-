@@ -105,6 +105,29 @@ jobs:
           cp native/ps5/sha256.cpp native/ps5/sha256.hpp "$builder/src/"
           cp native/ps5/http_download.cpp native/ps5/http_download.hpp "$builder/src/"
           rm -f "$builder/src/demo_renderer.cpp" "$builder/src/demo_renderer.hpp"
+          # The SDK exposes SCE imports as shared stub libraries under target/lib.
+          # Add that search path and the three native networking modules used by NESTS.
+          python3 - "$builder/tools/build.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          old_link = '"$sdk_root/bin/prospero-lld" -T "$native/ps5-pie.ld" --eh-frame-hdr \\\n'
+          new_link = '"$sdk_root/bin/prospero-lld" -L "$sdk_root/target/lib" -T "$native/ps5-pie.ld" --eh-frame-hdr \\\n'
+          old_end = '    --as-needed "$sdk_root"/target/lib/*.so\\n'
+          new_end = '    --no-as-needed -lSceNet -lSceSsl -lSceHttp \\\n    --as-needed "$sdk_root"/target/lib/*.so\\n'
+          if source.count(old_link) != 1 or source.count(old_end) != 1:
+              raise SystemExit("expected native linker invocation was not found exactly once")
+          source = source.replace(old_link, new_link).replace(old_end, new_end)
+          path.write_text(source)
+          PY
+          for library in SceSystemService SceUserService ScePad SceAudioOut SceVideoOut SceKeyboard SceImeDialog SceNet SceSsl SceHttp; do
+            test -f "$builder/.deps/native/ps5-payload-sdk/target/lib/lib${library}.so" || {
+              echo "Missing PS5 SDK import stub: lib${library}.so" >&2
+              exit 1
+            }
+          done
           rsvg-convert -w 512 -h 512 -o "$builder/sce_sys/icon0.png" preview/nests-mark.svg
           rm -f "$builder/sce_sys/pic0.dds" "$builder/sce_sys/pic1.dds" "$builder/sce_sys/snd0.at9"
       - name: Configure NESTS development title identity
